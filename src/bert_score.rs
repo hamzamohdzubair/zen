@@ -140,11 +140,9 @@ impl BertScorer {
     }
 
     /// Get the path to the model file, downloading if necessary
+    /// Uses HuggingFace Hub standard cache location for interoperability
     fn get_or_download_model() -> Result<PathBuf> {
-        let cache_dir = dirs::cache_dir()
-            .context("Failed to get cache directory")?
-            .join("zen")
-            .join("bert");
+        let cache_dir = Self::get_hf_cache_dir()?;
 
         std::fs::create_dir_all(&cache_dir)
             .context("Failed to create cache directory")?;
@@ -161,11 +159,9 @@ impl BertScorer {
     }
 
     /// Get the path to the tokenizer file, downloading if necessary
+    /// Uses HuggingFace Hub standard cache location for interoperability
     fn get_or_download_tokenizer() -> Result<PathBuf> {
-        let cache_dir = dirs::cache_dir()
-            .context("Failed to get cache directory")?
-            .join("zen")
-            .join("bert");
+        let cache_dir = Self::get_hf_cache_dir()?;
 
         std::fs::create_dir_all(&cache_dir)
             .context("Failed to create cache directory")?;
@@ -179,6 +175,31 @@ impl BertScorer {
         }
 
         Ok(tokenizer_path)
+    }
+
+    /// Get HuggingFace Hub cache directory for this model
+    /// Follows the standard: ~/.cache/huggingface/hub/models--{org}--{model}/snapshots/{revision}/
+    fn get_hf_cache_dir() -> Result<PathBuf> {
+        // Check for HF_HOME or HUGGINGFACE_HUB_CACHE environment variables
+        let base_cache = if let Ok(hf_home) = std::env::var("HF_HOME") {
+            PathBuf::from(hf_home).join("hub")
+        } else if let Ok(hf_cache) = std::env::var("HUGGINGFACE_HUB_CACHE") {
+            PathBuf::from(hf_cache)
+        } else {
+            // Default to standard cache location
+            dirs::cache_dir()
+                .context("Failed to get cache directory")?
+                .join("huggingface")
+                .join("hub")
+        };
+
+        // Use HuggingFace Hub naming convention
+        // Format: models--{organization}--{model_name}/snapshots/{revision}/onnx/
+        Ok(base_cache
+            .join("models--sentence-transformers--all-MiniLM-L6-v2")
+            .join("snapshots")
+            .join("main")
+            .join("onnx"))
     }
 
     /// Download the ONNX model from HuggingFace
