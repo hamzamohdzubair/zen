@@ -1,0 +1,36 @@
+[package]
+name = "zen"
+version = "0.0.1"
+edition = "2021"
+authors = ["Hamza Mohd Zubair <hamzamohdzubair@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "A spaced repetition CLI for active recall using FSRS algorithm"
+repository = "https://github.com/hamzamohdzubair/zen"
+readme = "README.md"
+keywords = ["flashcards", "spaced-repetition", "fsrs", "cli", "learning"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "zen"
+path = "src/main.rs"
+
+[dependencies]
+# CLI framework
+clap = { version = "4", features = ["derive"] }
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Random ID generation
+rand = "0.8"
+
+# FSRS algorithm (for future phases)
+fsrs = "5.2"
+
+# Error handling
+anyhow = "1.0"
