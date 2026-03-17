@@ -5,17 +5,8 @@ Set Width 1200
 Set Height 600
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 100ms
-Set Shell "bash"
 
-Hide
-Type "export PATH=$PWD/target/release:$PATH" Enter
-Sleep 500ms
-Show
-
-Type "# Find and edit cards with fuzzy search" Sleep 500ms Enter
-Sleep 500ms
-
-Type "zen find France" Sleep 500ms Enter
+Type "zen find France" Enter
 Sleep 2s
 
 Type "rust" Sleep 300ms
