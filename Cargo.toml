@@ -1,6 +1,6 @@
 [package]
 name = "zen"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 authors = ["Hamza Mohd Zubair <hamzamohdzubair@gmail.com>"]
 license = "MIT OR Apache-2.0"
