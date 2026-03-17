@@ -2,6 +2,17 @@
 
 A spaced repetition CLI for active recall using the FSRS algorithm.
 
+## Demo
+
+### Create a new flashcard
+![Create Card](demos/create-card.gif)
+
+### Find and edit cards with fuzzy search
+![Find Cards](demos/find-cards.gif)
+
+### Review session with FSRS scheduling
+![Review Session](demos/review-session.gif)
+
 ## Features
 
 - **Simple card creation**: Create flashcards directly from the command line
