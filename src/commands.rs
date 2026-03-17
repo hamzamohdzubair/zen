@@ -15,7 +15,7 @@ pub fn new_card(question: &str) -> Result<()> {
 
     // Prompt for answer
     println!("\nQuestion: {}\n", question);
-    println!("Enter answer (press Ctrl+D when done, or enter an empty line to finish):");
+    println!("Enter answer (press Enter twice to finish):");
     print!("> ");
     io::stdout().flush()?;
 
@@ -48,7 +48,7 @@ pub fn new_card(question: &str) -> Result<()> {
 }
 
 /// Read multi-line input from stdin
-/// Stops on EOF (Ctrl+D) or when user enters an empty line after some content
+/// Stops when user presses Enter twice (empty line after content)
 fn read_multiline_input() -> Result<String> {
     let mut lines = Vec::new();
     let stdin = io::stdin();
@@ -86,6 +86,52 @@ fn read_multiline_input() -> Result<String> {
     // Join lines and trim trailing newline
     let result = lines.join("");
     Ok(result.trim_end().to_string())
+}
+
+/// Find and edit flashcards using fuzzy search
+pub fn find_cards(query: &str) -> Result<()> {
+    // Create TUI app with initial query
+    let mut app = crate::tui::FinderApp::new(query).context("Failed to create finder app")?;
+
+    // Run TUI loop
+    match app.run()? {
+        Some(card_id) => {
+            // User pressed Enter - edit the card
+            println!("\nOpening card {} in editor...", card_id);
+
+            if crate::editor::edit_card_in_editor(&card_id)? {
+                println!("✓ Card updated and schedule reset!");
+            } else {
+                println!("No changes made.");
+            }
+        }
+        None => {
+            // User pressed ESC - just exit
+            println!("Search cancelled.");
+        }
+    }
+
+    Ok(())
+}
+
+/// Start a review session
+pub fn start_review() -> Result<()> {
+    match crate::review_tui::ReviewApp::new() {
+        Ok(mut app) => app.run(),
+        Err(e) if e.to_string().contains("No cards due") => {
+            println!("\nNo cards are due for review right now!");
+            println!("Come back later or create new cards with 'zen new'.");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Show statistics and card information
+pub fn show_stats() -> Result<()> {
+    let mut app = crate::stats_tui::StatsApp::new()
+        .context("Failed to load statistics")?;
+    app.run()
 }
 
 #[cfg(test)]

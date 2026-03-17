@@ -30,6 +30,20 @@ pub fn ensure_directories() -> Result<()> {
     if !cards.exists() {
         fs::create_dir_all(&cards)
             .with_context(|| format!("Failed to create directory: {}", cards.display()))?;
+
+        // Create .markdownlintrc to disable MD013 (line length) and MD041 (first line heading)
+        let markdownlint_config = cards.join(".markdownlintrc");
+        let config_content = r#"{
+  "MD013": false,
+  "MD041": false
+}
+"#;
+        fs::write(&markdownlint_config, config_content).with_context(|| {
+            format!(
+                "Failed to create markdownlint config at {}",
+                markdownlint_config.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -66,7 +80,9 @@ fn parse_card_content(content: &str) -> Result<(String, String)> {
     let parts: Vec<&str> = content.split(SEPARATOR).collect();
 
     if parts.len() != 2 {
-        anyhow::bail!("Invalid card format: expected question and answer separated by '\\n\\n---\\n\\n'");
+        anyhow::bail!(
+            "Invalid card format: expected question and answer separated by '\\n\\n---\\n\\n'"
+        );
     }
 
     Ok((parts[0].to_string(), parts[1].to_string()))
@@ -93,7 +109,10 @@ mod tests {
     fn test_parse_multiline_card() {
         let content = "What are the main features?\n\n1. Safety\n2. Speed\n\n---\n\nRust provides:\n- Memory safety\n- Thread safety";
         let (question, answer) = parse_card_content(content).unwrap();
-        assert_eq!(question, "What are the main features?\n\n1. Safety\n2. Speed");
+        assert_eq!(
+            question,
+            "What are the main features?\n\n1. Safety\n2. Speed"
+        );
         assert_eq!(answer, "Rust provides:\n- Memory safety\n- Thread safety");
     }
 }

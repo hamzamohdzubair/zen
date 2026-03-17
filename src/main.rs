@@ -19,12 +19,12 @@ enum Commands {
         question: Vec<String>,
     },
 
-    /// Find and edit cards (fuzzy search)
+    /// Find and edit cards (interactive fuzzy search)
     #[command(name = "find", alias = "f")]
     Find {
-        /// Search query
+        /// Optional initial search query (can also type in the interactive search)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        query: Vec<String>,
+        query: Option<Vec<String>>,
     },
 
     /// Start a review session
@@ -49,14 +49,14 @@ fn main() -> Result<()> {
             zen::commands::new_card(&question_text)?;
         }
         Commands::Find { query } => {
-            let query_text = query.join(" ");
-            println!("Find command not yet implemented. Query: {}", query_text);
+            let query_text = query.map(|q| q.join(" ")).unwrap_or_default();
+            zen::commands::find_cards(&query_text)?;
         }
         Commands::Start => {
-            println!("Start command not yet implemented.");
+            zen::commands::start_review()?;
         }
         Commands::Stats => {
-            println!("Stats command not yet implemented.");
+            zen::commands::show_stats()?;
         }
         Commands::List => {
             println!("List command not yet implemented.");

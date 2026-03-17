@@ -34,3 +34,23 @@ fsrs = "5.2"
 
 # Error handling
 anyhow = "1.0"
+
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Fuzzy matching
+nucleo-matcher = "0.3"
+
+# Content hashing for edit detection
+sha2 = "0.10"
+
+# BERT scoring
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["half", "download-binaries", "tls-rustls"] }
+tokenizers = "0.20"
+ndarray = "0.16"
+ureq = "2.10"
+dirs = "5.0"
+
+[dev-dependencies]
+tempfile = "3.15"
