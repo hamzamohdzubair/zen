@@ -6,10 +6,13 @@
 
 pub mod bert_score;
 pub mod card;
+pub mod card_creation_tui;
 pub mod commands;
+pub mod config;
 pub mod database;
 pub mod editor;
 pub mod finder;
+pub mod llm_evaluator;
 pub mod review;
 pub mod review_tui;
 pub mod stats_tui;

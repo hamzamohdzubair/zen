@@ -62,11 +62,12 @@ pub fn insert_card(
         params![id, created_at.to_rfc3339(), modified_at.to_rfc3339()],
     )?;
 
-    // Initialize schedule for new card (due immediately)
+    // Initialize schedule for new card (due after 24-hour learning delay)
+    let initial_due_date = Utc::now() + chrono::Duration::hours(24);
     conn.execute(
         "INSERT INTO card_schedule (card_id, due_date, stability, difficulty, retrievability)
          VALUES (?1, ?2, NULL, NULL, NULL)",
-        params![id, Utc::now().to_rfc3339()],
+        params![id, initial_due_date.to_rfc3339()],
     )?;
 
     Ok(())

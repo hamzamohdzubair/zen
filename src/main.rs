@@ -11,13 +11,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create a new flashcard
+    /// Create a new flashcard (launches TUI)
     #[command(name = "new")]
-    New {
-        /// The question for the flashcard (no quotes needed)
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        question: Vec<String>,
-    },
+    New,
 
     /// Find and edit cards (interactive fuzzy search)
     #[command(name = "find", alias = "f")]
@@ -44,9 +40,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::New { question } => {
-            let question_text = question.join(" ");
-            zen::commands::new_card(&question_text)?;
+        Commands::New => {
+            zen::commands::new_card()?;
         }
         Commands::Find { query } => {
             let query_text = query.map(|q| q.join(" ")).unwrap_or_default();

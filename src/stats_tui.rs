@@ -279,14 +279,20 @@ impl StatsApp {
             .map(|stat| {
                 // Format due date
                 let due_diff = stat.due_date.signed_duration_since(now);
-                let (due_str, due_color) = if due_diff.num_days() < 0 {
+                let total_hours = due_diff.num_hours();
+
+                let (due_str, due_color) = if total_hours < -48 {
+                    // Overdue by more than 48 hours - seriously overdue (RED)
                     (format!("{}d ago", -due_diff.num_days()), Color::Red)
-                } else if due_diff.num_days() == 0 {
-                    ("Today".to_string(), Color::Yellow)
-                } else if due_diff.num_days() < 7 {
-                    (format!("{}d", due_diff.num_days()), Color::Green)
+                } else if total_hours < 0 {
+                    // Overdue by 0-48 hours - fresh review window (GREEN)
+                    (format!("{}h ago", -total_hours), Color::Green)
+                } else if total_hours < 48 {
+                    // Due within 48 hours - show in hours (YELLOW)
+                    (format!("in {}h", total_hours), Color::Yellow)
                 } else {
-                    (format!("{}d", due_diff.num_days()), Color::DarkGray)
+                    // Due later - show in days (YELLOW)
+                    (format!("in {}d", due_diff.num_days()), Color::Yellow)
                 };
 
                 // Get last 10 ratings with color coding

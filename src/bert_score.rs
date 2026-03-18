@@ -238,7 +238,7 @@ mod tests {
     #[test]
     #[ignore] // Ignore by default as it requires model download
     fn test_identical_texts() {
-        let scorer = BertScorer::new().expect("Failed to create scorer");
+        let mut scorer = BertScorer::new().expect("Failed to create scorer");
         let text = "The capital of France is Paris";
         let score = scorer.calculate_score(text, text).expect("Failed to calculate score");
 
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     #[ignore] // Ignore by default as it requires model download
     fn test_semantic_similarity() {
-        let scorer = BertScorer::new().expect("Failed to create scorer");
+        let mut scorer = BertScorer::new().expect("Failed to create scorer");
         let text1 = "The capital of France is Paris";
         let text2 = "Paris is the capital city of France";
         let score = scorer.calculate_score(text1, text2).expect("Failed to calculate score");
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     #[ignore] // Ignore by default as it requires model download
     fn test_different_texts() {
-        let scorer = BertScorer::new().expect("Failed to create scorer");
+        let mut scorer = BertScorer::new().expect("Failed to create scorer");
         let text1 = "The capital of France is Paris";
         let text2 = "Dogs are great pets";
         let score = scorer.calculate_score(text1, text2).expect("Failed to calculate score");
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_cosine_similarity() {
-        let scorer = BertScorer::new().unwrap_or_else(|_| {
+        let _scorer = BertScorer::new().unwrap_or_else(|_| {
             // Create a dummy scorer just for testing cosine similarity
             panic!("Cosine similarity test doesn't require model loading");
         });

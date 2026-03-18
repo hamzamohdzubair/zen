@@ -183,12 +183,23 @@ fn test_get_due_cards() {
     let conn = setup_test_db();
     let now = Utc::now();
 
-    // Insert 3 cards
+    // Insert 3 cards (with 24-hour learning delay by default)
     database::insert_card(&conn, "card-1", &now, &now).unwrap();
     database::insert_card(&conn, "card-2", &now, &now).unwrap();
     database::insert_card(&conn, "card-3", &now, &now).unwrap();
 
-    // Make card-1 and card-2 due now (default behavior from insert_card)
+    // Explicitly make card-1 and card-2 due now (override the 24-hour delay)
+    conn.execute(
+        "UPDATE card_schedule SET due_date = ?1 WHERE card_id = ?2",
+        rusqlite::params![now.to_rfc3339(), "card-1"],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE card_schedule SET due_date = ?1 WHERE card_id = ?2",
+        rusqlite::params![now.to_rfc3339(), "card-2"],
+    )
+    .unwrap();
+
     // Make card-3 due in the future
     let future = now + chrono::Duration::days(10);
     conn.execute(
@@ -204,6 +215,37 @@ fn test_get_due_cards() {
     assert!(due_cards.contains(&"card-1".to_string()));
     assert!(due_cards.contains(&"card-2".to_string()));
     assert!(!due_cards.contains(&"card-3".to_string()));
+}
+
+#[test]
+fn test_new_card_learning_delay() {
+    let conn = setup_test_db();
+    let now = Utc::now();
+
+    // Insert a new card
+    database::insert_card(&conn, "new-card", &now, &now).unwrap();
+
+    // Get the schedule for the new card
+    let schedule = database::get_card_schedule(&conn, "new-card").unwrap();
+
+    // Verify that the due date is approximately 24 hours in the future
+    let expected_due = now + chrono::Duration::hours(24);
+    let time_diff = (schedule.due_date - expected_due).num_seconds().abs();
+
+    // Allow a small margin of error (within 2 seconds) for test execution time
+    assert!(
+        time_diff < 2,
+        "New card should be due in 24 hours. Expected: {}, Got: {}",
+        expected_due,
+        schedule.due_date
+    );
+
+    // Verify the card is not due immediately
+    let due_cards = database::get_due_cards(&conn).unwrap();
+    assert!(
+        !due_cards.contains(&"new-card".to_string()),
+        "New card should not be due immediately due to 24-hour learning delay"
+    );
 }
 
 #[test]
