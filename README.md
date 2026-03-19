@@ -1,6 +1,9 @@
 # Zen
 
-A spaced repetition CLI for active recall using the FSRS algorithm.
+An advanced CLI learning tool powered by three core principles:
+1. **Active Recall** - Test yourself instead of passive review
+2. **Spaced Repetition** - FSRS algorithm for optimal scheduling
+3. **Cognitive Load** - LLM-powered evaluation and ideal answers
 
 ## Demo
 
