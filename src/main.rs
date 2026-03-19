@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "zen")]
 #[command(about = "A spaced repetition CLI for active recall", long_about = None)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
