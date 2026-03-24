@@ -1,91 +1,177 @@
-//! Command implementations for the CLI
+//! Command implementations for the zen CLI
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use chrono::Utc;
 
-use crate::card::{generate_unique_card_id, Card};
-use crate::database;
-use crate::storage;
+/// Add a new topic with comma-separated keywords
+pub fn add_topic(keywords_str: &str) -> Result<()> {
+    // Parse comma-separated keywords
+    let keywords: Vec<String> = keywords_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
 
-/// Create a new flashcard using TUI interface
-pub fn new_card() -> Result<()> {
-    // Launch the card creation TUI
-    let mut app = crate::card_creation_tui::CardCreationApp::new()?;
-
-    match app.run()? {
-        Some((question, answer)) => {
-            // User saved a card, create it
-            let card = Card::new(question, answer);
-
-            // Generate unique ID
-            let card_id = generate_unique_card_id()?;
-
-            // Save to filesystem
-            storage::write_card(&card_id, &card.question, &card.answer)
-                .context("Failed to write card to file")?;
-
-            // Save to database
-            let conn = database::init_database()?;
-            database::insert_card(&conn, &card_id, &card.created_at, &card.modified_at)
-                .context("Failed to save card to database")?;
-
-            println!("\n✓ Card created: {}", card_id);
-            Ok(())
-        }
-        None => {
-            // User cancelled
-            println!("Card creation cancelled.");
-            Ok(())
-        }
+    if keywords.is_empty() {
+        anyhow::bail!("No keywords provided");
     }
+
+    // Validate keywords
+    if keywords.iter().any(|k| k.len() > 100) {
+        anyhow::bail!("Keywords must be under 100 characters");
+    }
+
+    if keywords.len() > 20 {
+        anyhow::bail!("Maximum 20 keywords per topic");
+    }
+
+    // Create topic
+    let topic_id = crate::topic::generate_unique_topic_id()?;
+    let now = Utc::now();
+
+    // Save to database
+    let conn = crate::database::init_database()?;
+    crate::database::insert_topic(&conn, &topic_id, &now.to_rfc3339(), &now.to_rfc3339())?;
+    crate::database::insert_topic_keywords(&conn, &topic_id, &keywords)?;
+
+    // Initialize schedule (due immediately)
+    let due_date = now;
+    crate::database::insert_initial_topic_schedule(&conn, &topic_id, &due_date)?;
+
+    println!("✓ Topic created: {}", topic_id);
+    println!("  Keywords: {}", keywords.join(", "));
+    println!("  Due for review now");
+
+    Ok(())
 }
 
-/// Find and edit flashcards using fuzzy search
-pub fn find_cards(query: &str) -> Result<()> {
-    // Create TUI app with initial query
-    let mut app = crate::tui::FinderApp::new(query).context("Failed to create finder app")?;
+/// Start a topic review session
+pub fn start_topic_review() -> Result<()> {
+    // Check if there are any due topics
+    let conn = crate::database::init_database()?;
+    let due_topics = crate::database::get_due_topics(&conn)?;
 
-    // Run TUI loop
-    match app.run()? {
-        Some(card_id) => {
-            // User pressed Enter - edit the card
-            println!("\nOpening card {} in editor...", card_id);
+    if due_topics.is_empty() {
+        println!("No topics due for review!");
+        println!("\nTip: Use 'zen topics --due' to see when topics are due");
+        return Ok(());
+    }
 
-            if crate::editor::edit_card_in_editor(&card_id)? {
-                println!("✓ Card updated and schedule reset!");
+    // Launch TUI app
+    crate::topic_review_tui::TopicReviewApp::new()?;
+
+    Ok(())
+}
+
+/// Show topic statistics
+pub fn show_topic_stats() -> Result<()> {
+    let conn = crate::database::init_database()?;
+    let stats = crate::database::get_topic_stats(&conn)?;
+
+    println!("\n╔════════════════════════════╗");
+    println!("║   Topic Statistics         ║");
+    println!("╚════════════════════════════╝");
+    println!();
+    println!("  Total topics:       {}", stats.total);
+    println!("  Due today:          {}", stats.due_today);
+    println!("  Due this week:      {}", stats.due_week);
+    println!("  Reviews completed:  {}", stats.reviews_completed);
+
+    if stats.reviews_completed > 0 {
+        println!("  Average score:      {:.1}%", stats.average_score);
+    }
+    println!();
+
+    Ok(())
+}
+
+/// List all topics or only due topics
+pub fn list_topics(due_only: bool) -> Result<()> {
+    let conn = crate::database::init_database()?;
+    let topics = if due_only {
+        crate::database::get_due_topics_with_info(&conn)?
+    } else {
+        crate::database::get_all_topics(&conn)?
+    };
+
+    if topics.is_empty() {
+        if due_only {
+            println!("No topics are due for review");
+        } else {
+            println!("No topics yet. Create one with: zen add \"keyword1, keyword2\"");
+        }
+        return Ok(());
+    }
+
+    let title = if due_only { "Due Topics" } else { "All Topics" };
+    println!("\n{}", title);
+    println!("{}", "=".repeat(title.len()));
+    println!();
+
+    for topic in topics {
+        let keywords_display = topic.keywords.join(", ");
+        let keywords_display = if keywords_display.len() > 60 {
+            format!("{}...", &keywords_display[..57])
+        } else {
+            keywords_display
+        };
+
+        // Format due date
+        let now = Utc::now();
+        let due_str = if topic.due_date <= now {
+            "Due now".to_string()
+        } else {
+            let days = (topic.due_date - now).num_days();
+            if days == 0 {
+                "Due today".to_string()
+            } else if days == 1 {
+                "Due tomorrow".to_string()
             } else {
-                println!("No changes made.");
+                format!("Due in {} days", days)
             }
-        }
-        None => {
-            // User pressed ESC - just exit
-            println!("Search cancelled.");
-        }
+        };
+
+        println!("  {} | {} | {}", topic.id, keywords_display, due_str);
+    }
+    println!();
+
+    Ok(())
+}
+
+/// Delete a topic
+pub fn delete_topic(topic_id: &str) -> Result<()> {
+    let conn = crate::database::init_database()?;
+
+    // Check if topic exists
+    if !crate::database::topic_exists_in_db(&conn, topic_id)? {
+        anyhow::bail!("Topic '{}' not found", topic_id);
+    }
+
+    // Get keywords for confirmation
+    let keywords = crate::database::get_topic_keywords(&conn, topic_id)?;
+
+    // Confirm deletion
+    println!("Delete topic '{}'?", topic_id);
+    println!("Keywords: {}", keywords.join(", "));
+    print!("\nType 'yes' to confirm: ");
+
+    use std::io::{self, Write};
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    if input.trim().eq_ignore_ascii_case("yes") {
+        crate::database::delete_topic(&conn, topic_id)?;
+        println!("✓ Topic deleted");
+    } else {
+        println!("Deletion cancelled");
     }
 
     Ok(())
 }
 
-/// Start a review session
-pub fn start_review() -> Result<()> {
-    match crate::review_tui::ReviewApp::new() {
-        Ok(mut app) => app.run(),
-        Err(e) if e.to_string().contains("No cards due") => {
-            println!("\nNo cards are due for review right now!");
-            println!("Come back later or create new cards with 'zen new'.");
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
-}
-
-/// Show statistics and card information
-pub fn show_stats() -> Result<()> {
-    let mut app = crate::stats_tui::StatsApp::new()
-        .context("Failed to load statistics")?;
-    app.run()
-}
-
-#[cfg(test)]
-mod tests {
-    // Tests for new_card() are integration tests since it requires TUI interaction
+/// Show stats TUI with topic and keyword performance
+pub fn show_stats_tui() -> Result<()> {
+    crate::stats_tui::StatsApp::new()
 }

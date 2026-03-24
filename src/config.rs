@@ -55,6 +55,26 @@ impl Config {
     }
 }
 
+/// Get path to zen directory: ~/.zen
+pub fn zen_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir()
+        .context("Could not find home directory")?;
+    Ok(home.join(".zen"))
+}
+
+/// Get path to database file: ~/.zen/zen.db
+pub fn db_path() -> Result<PathBuf> {
+    Ok(zen_dir()?.join("zen.db"))
+}
+
+/// Ensure zen directory exists
+pub fn ensure_directories() -> Result<()> {
+    let zen_path = zen_dir()?;
+    std::fs::create_dir_all(&zen_path)
+        .with_context(|| format!("Failed to create directory: {}", zen_path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

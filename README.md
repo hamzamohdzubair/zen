@@ -1,185 +1,383 @@
-# Zen
+# Zen - Topic-Based Spaced Repetition CLI
 
-An advanced CLI learning tool powered by three core principles:
-1. **Active Recall** - Test yourself instead of passive review
-2. **Spaced Repetition** - FSRS algorithm for optimal scheduling
-3. **Cognitive Load** - LLM-powered evaluation and ideal answers
-
-## Demo
-
-### Create a new flashcard
-![Create Card](demos/create-card.gif)
-
-### Find and edit cards with fuzzy search
-![Find Cards](demos/find-cards.gif)
-
-### Review session with FSRS scheduling
-![Review Session](demos/review-session.gif)
+A modern spaced repetition CLI that uses LLM-powered question generation and evaluation to help you learn any topic effectively.
 
 ## Features
 
-- **Simple card creation**: Create flashcards directly from the command line
-- **Question-answer format**: Focus on what matters - questions and answers
-- **FSRS algorithm**: Uses the modern Free Spaced Repetition Scheduler for optimal learning
-- **Interactive review sessions**: TUI-based review with real-time interval previews
-- **Semantic answer validation**: BERT-based similarity scoring for evaluating answer quality
-- **Statistics dashboard**: Track your learning progress with detailed statistics
-- **Fuzzy search**: Find and edit cards with interactive fuzzy matching
-- **CLI-first**: All interactions through the terminal
-- **Easy editing**: Cards stored as simple markdown files
-- **Efficient storage**: Hybrid approach with markdown for content and SQLite for scheduling
+- **Topic-Based Learning**: Organize knowledge by keywords instead of individual flashcards
+- **LLM-Powered Questions**: Fresh questions generated for each review session
+- **Automatic Grading**: LLM evaluates your answers and provides detailed feedback
+- **FSRS Scheduling**: Advanced spaced repetition algorithm for optimal review timing
+- **3-Question Review**: Each topic tested with 3 different questions per session
+- **Automatic Rating**: Your scores (0-100) automatically convert to SRS ratings
+- **Beautiful TUI**: Clean, intuitive terminal interface
 
 ## Installation
 
 ```bash
-cargo install --git https://github.com/hamzamohdzubair/zen
+cargo install --path .
 ```
 
-Or clone and build from source:
+## Quick Start
+
+### 1. Configure LLM
+
+Create `~/.zen/config.toml`:
+
+```toml
+[llm]
+provider = "groq"
+api_key = "your-groq-api-key"
+model = "llama-3.3-70b-versatile"
+```
+
+Get a free Groq API key at [groq.com](https://groq.com)
+
+### 2. Add Topics
 
 ```bash
-git clone git@github.com:hamzamohdzubair/zen.git
-cd zen
-cargo build --release
+# Single keyword
+zen add "LSTM"
+
+# Multiple related keywords
+zen add "Google Cloud, GCP, cloud services"
+zen add "AI, RMSE, metrics, evaluation, model assessment"
 ```
 
-## Usage
+**Note**: Comma separates keywords, spaces are part of each keyword.
 
-### Create a new card
-
-```bash
-zen new what is the relationship between vpc and vm in google cloud
-```
-
-You'll be prompted to enter the answer (multi-line supported). Press Enter twice to finish.
-
-### Find and edit cards
-
-```bash
-zen find google cloud    # Fuzzy search for cards
-zen f google cloud       # Short alias
-```
-
-Opens an interactive fuzzy finder. Type to filter cards, use arrows/Tab to navigate, press Enter to edit in your default editor.
-
-### Start a review session
+### 3. Review Topics
 
 ```bash
 zen start
 ```
 
-Reviews all cards that are due:
-- Press `Space` or `Enter` to reveal the answer
-- BERT semantic similarity score shows how close your answer is to the expected answer
-- Rate your recall: `1` (Again), `2` (Hard), `3` (Good), `4` (Easy)
-- Each rating shows the next review interval (e.g., 10m, 3d, 8d, 21d)
-- Progress indicator shows your position (Card 3/10)
-- Summary statistics displayed at the end
+The review process:
+1. See your topic keywords
+2. LLM generates a question
+3. Type your answer (multi-line supported)
+4. LLM grades your answer (0-100) and provides feedback
+5. Repeat for 3 questions total
+6. Average score determines next review date
 
-### Show statistics
-
-```bash
-zen stats                # Show review statistics and progress
-```
-
-### List all cards (coming soon)
+### 4. Track Progress
 
 ```bash
-zen list                 # List all cards
+# View all topics
+zen topics
+
+# View only due topics
+zen topics --due
+
+# See detailed statistics (TUI)
+zen stats
 ```
 
-## Card Storage
+The `stats` command opens an interactive TUI with two screens:
+- **Topic Performance**: Shows each topic with keywords, last/average scores, and question-wise performance matrix
+- **Keyword Performance**: Shows aggregated statistics for each keyword with performance across all topics
 
-Cards are stored in `~/.zen/`:
+Navigation:
+- `Tab` - Switch between Topic and Keyword views
+- `↑/↓` or `j/l` - Scroll up/down
+- `PgUp/PgDn` - Scroll by 10 items
+- `Home/End` - Jump to top/bottom
+- `q` - Quit
 
-- **Content**: `~/.zen/cards/*.md` - Simple markdown files
-- **Metadata**: `~/.zen/zen.db` - SQLite database for scheduling
+### 5. Manage Topics
 
-### Card Format
+```bash
+# Delete a topic
+zen delete <topic-id>
+```
 
-Cards use a minimal format:
+## How It Works
+
+### Topic Reviews
+
+Each review session:
+- LLM generates **3 unique questions** covering your topic
+- You answer each question in the TUI
+- LLM evaluates each answer (0-100 score + feedback)
+- Average score converts to FSRS rating:
+  - **90%+ → Easy** (long interval)
+  - **70-89% → Good** (medium interval)
+  - **60-69% → Hard** (short interval)
+  - **<60% → Again** (very short interval)
+
+### Score-to-Rating Conversion
+
+The app automatically determines your rating based on LLM scores:
+
+| Score Range | Rating | Next Review |
+|-------------|--------|-------------|
+| 90-100%     | Easy   | Weeks/months later |
+| 70-89%      | Good   | Days/weeks later |
+| 60-69%      | Hard   | Days later |
+| 0-59%       | Again  | Hours/1 day later |
+
+### FSRS Algorithm
+
+Uses the Free Spaced Repetition Scheduler (FSRS) algorithm for optimal review timing:
+- **Stability**: How well you remember
+- **Difficulty**: How hard the topic is for you
+- **Retrievability**: Probability of recall
+
+The algorithm adapts to your performance and schedules reviews at the optimal time for long-term retention.
+
+## Commands
+
+```bash
+zen add <keywords>      # Add a new topic
+zen start               # Start review session
+zen topics              # List all topics
+zen topics --due        # List only due topics
+zen stats               # Show detailed statistics (TUI)
+zen delete <id>         # Delete a topic
+zen --help              # Show help
+zen --version           # Show version
+```
+
+## Examples
+
+### Adding Topics
+
+```bash
+# Machine Learning concepts
+zen add "neural networks, backpropagation, gradient descent"
+
+# Programming languages
+zen add "Rust, ownership, borrowing"
+
+# Math concepts
+zen add "calculus, derivatives, chain rule"
+
+# Business concepts
+zen add "product-market fit, MVP, lean startup"
+```
+
+### Review Session Example
 
 ```
-What is your question?
+┌─ Topic 1 of 3 | ID: 7jlHGY ──────────────────┐
+│ LSTM, recurrent neural networks, time series │
+└───────────────────────────────────────────────┘
 
----
+┌─ Question 1 of 3 ─────────────────────────────┐
+│ How does an LSTM differ from a standard RNN   │
+│ in terms of handling the vanishing gradient   │
+│ problem?                                       │
+└───────────────────────────────────────────────┘
 
-This is the answer.
+┌─ Your Answer (Press Space to start typing) ───┐
+│                                                │
+└────────────────────────────────────────────────┘
 ```
 
-Everything before `\n\n---\n\n` is the question, everything after is the answer.
+After answering, you'll see:
 
-## Roadmap
+```
+┌─ Score: 85/100 (Good) ────────────────────────┐
+│ Good explanation of gates and memory cells.   │
+│ Could have mentioned the forget gate's role.  │
+└────────────────────────────────────────────────┘
+```
 
-- [x] **Phase 1**: Basic card creation and storage
-- [x] **Phase 2**: Fuzzy search and editing with TUI
-- [x] **Phase 3**: Review sessions with FSRS scheduling
-- [x] **Phase 4**: Statistics and polish
-- [ ] **Phase 5**: Additional features and refinements
+## Performance Statistics
 
-See [DESIGN.md](DESIGN.md) for detailed feature planning.
+The `zen stats` command provides detailed statistics in an interactive TUI with two screens:
 
-## How Reviews Work (FSRS)
+### Topic Performance Screen
 
-Zen uses the FSRS (Free Spaced Repetition Scheduler) algorithm to optimize your review schedule:
+Shows all topics sorted by performance (lowest scores first) with a statistics table on the right:
 
-1. **New cards** start with short intervals (minutes to days)
-2. **Each rating** updates the card's memory parameters:
-   - **Stability**: How long the memory lasts
-   - **Difficulty**: The card's inherent difficulty
-   - **Retrievability**: Your current memory strength
-3. **Next review date** is calculated to maintain 90% retention probability
-4. **Four rating options**:
-   - `1 - Again`: Failed recall (review soon, ~10m)
-   - `2 - Hard`: Difficult recall (~3d)
-   - `3 - Good`: Correct with effort (~8d)
-   - `4 - Easy`: Perfect recall (~21d)
+```
+                    Topic Performance
 
-Intervals shown are examples for new cards. The algorithm adapts based on your actual performance history.
+Keywords                Last  Avg  Recent Sessions  ┃              Topic Keyword
+────────────────────────────────────────────────────┃ Total           15     42
+LSTM, RNN              65.0 72.5  · · · · · · ✗ ✓ - ┃ Due Today        3      5
+                                  · · · · · · ✓ - ✗ ┃ Due Week         8     12
+                                  · · · · · · - ✗ ✓ ┃ ─────────────────────────
+                                                     ┃ Reviews         95
+rust, ownership        78.3 80.1  · · · · · ✓ - ✓ - ┃ Avg Score   75.2%  74.8%
+                                  · · · · · - ✓ ✗ ✓ ┗━━━━━━━━━━━━━━━━━━━━━━━━
+                                  · · · · · ✓ - - -
+```
 
-## Semantic Answer Validation
+**Layout:**
+- **Left**: Topic list with performance matrices
+- **Right**: Statistics table comparing Topic and Keyword metrics
 
-During review sessions, Zen uses BERT-based semantic similarity scoring to help you evaluate your answers:
+**Fields:**
+- **Keywords**: Topic keywords (no IDs shown)
+- **Last**: Score from most recent review session
+- **Avg**: Overall average score across all reviews
+- **Recent Sessions**: Fixed 10-column × 3-row grid
+  - Each column = one review session with 3 questions
+  - Rightmost column = most recent session
+  - Symbols: `✓` Easy (≥90), `-` Good/Hard (60-89), `✗` Again (<60), `·` No data
 
-- **Automatic scoring**: After revealing the answer, your typed response is compared to the expected answer
-- **Similarity score**: Ranges from 0-100%, measuring semantic meaning (not exact word matching)
-- **Color-coded feedback**:
-  - 🟢 Green (≥80%): Excellent match
-  - 🟡 Yellow (60-79%): Good understanding
-  - 🟠 Orange (40-59%): Partial understanding
-  - 🔴 Red (<40%): Needs review
-- **Fallback**: If BERT model isn't available, scoring gracefully falls back to manual evaluation
+### Keyword Performance Screen
 
-The scoring is advisory - you still choose the final rating based on your actual recall.
+Shows aggregated statistics for each keyword with performance across topics:
 
-## Design Principles
+```
+╔════════════════════════════════════════════════════════════════╗
+║ Keyword Performance                                            ║
+║ Keywords: 42 | Due Today: 5 | Due Week: 12 | Avg: 74.8%      ║
+╚════════════════════════════════════════════════════════════════╝
 
-- **No full-screen interfaces**: All TUIs are max half-terminal height
-- **Vim-like navigation**: Ctrl+j/k for movement
-- **No quotes needed**: Natural command syntax
-- **Easy editing**: Edit cards in your favorite editor
-- **Non-invasive**: Minimal, focused interface
+Keyword                       Topics Avg    Performance by Topic (rightmost = most recent)
+──────────────────────────────────────────────────────────────────────────────────────────
+LSTM                          3      68.5   · · · · · · · ✗ - ✓
+                                            · · · · · · · ✓ ✗ -
+                                            · · · · · · · - ✓ ✗
+```
+
+**Fields:**
+- **Keyword**: The keyword text
+- **Topics**: Number of topics containing this keyword
+- **Avg**: Average score across all reviews for this keyword
+- **Performance Matrix**: Fixed 10-column × 3-row grid showing performance across topics
+  - Each column = 3 questions from one topic's most recent session
+  - If "LSTM" appears in 3 topics, rightmost 3 columns show those topics
+  - Shows how this keyword performs across different contexts
+  - Same color coding: Green (≥90), Yellow (60-89), Red (<60), Gray (no data)
+
+**Important**:
+- When you switch between views using Tab, the summary statistics update to show metrics relevant to that view
+- Keyword "Due Today" and "Due Week" counts show unique keywords in due topics
+- Both screens are sorted ascending by average score, so topics/keywords that need more practice appear at the top
+
+## Tips
+
+### Effective Keyword Selection
+
+- **Specific**: "LSTM architecture" is better than just "AI"
+- **Related**: Group keywords that belong together
+- **Memorable**: Use keywords that trigger the right mental model
+
+### Good Topics vs Bad Topics
+
+✅ **Good**: `"React hooks, useState, useEffect, component lifecycle"`
+- Related concepts
+- Right level of granularity
+- Clear scope
+
+❌ **Bad**: `"programming"`
+- Too broad
+- No clear scope
+- LLM can't generate focused questions
+
+### Review Best Practices
+
+- **Be honest**: Don't look up answers during review
+- **Type freely**: Multi-line answers are encouraged
+- **Review regularly**: The algorithm works best with consistent reviews
+- **Trust the LLM**: The grading is strict but fair
+
+## Configuration
+
+### LLM Providers
+
+Currently supports:
+- **Groq** (recommended - fast and free tier available)
+
+Configuration file: `~/.zen/config.toml`
+
+```toml
+[llm]
+provider = "groq"
+api_key = "your-api-key"
+model = "llama-3.3-70b-versatile"
+```
+
+### Data Location
+
+All data stored in `~/.zen/`:
+- `zen.db` - SQLite database with topics, schedules, and review history
+- `config.toml` - Configuration file
+
+## Architecture
+
+### Database Schema
+
+```
+topics
+├── id (TEXT)
+├── created_at (TIMESTAMP)
+└── modified_at (TIMESTAMP)
+
+topic_keywords
+├── topic_id (FK)
+├── keyword (TEXT)
+└── position (INTEGER)
+
+topic_schedule
+├── topic_id (FK)
+├── due_date (TIMESTAMP)
+├── stability (REAL)
+├── difficulty (REAL)
+└── retrievability (REAL)
+
+topic_review_logs
+├── topic_id (FK)
+├── timestamp (TIMESTAMP)
+├── rating (1-4)
+└── average_score (0-100)
+
+topic_question_logs
+├── review_log_id (FK)
+├── question_number (1-3)
+├── generated_question (TEXT)
+├── user_answer (TEXT)
+├── llm_score (0-100)
+└── llm_feedback (TEXT)
+```
 
 ## Development
 
-### Build
+### Building
 
 ```bash
 cargo build --release
 ```
 
-### Test
+### Running Tests
 
 ```bash
 cargo test
 ```
 
-### Run
+### Project Structure
 
-```bash
-cargo run -- new your question here
+```
+src/
+├── main.rs              # CLI entry point
+├── lib.rs               # Module exports
+├── commands.rs          # Command implementations
+├── database.rs          # SQLite operations
+├── topic.rs             # Topic data structures
+├── topic_review.rs      # Review session logic
+├── topic_review_tui.rs  # TUI application
+├── llm_evaluator.rs     # LLM integration
+└── config.rs            # Configuration management
 ```
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+MIT
+
+## Contributing
+
+Contributions welcome! Please open an issue or PR.
+
+## Roadmap
+
+- [ ] Add more LLM providers (OpenAI, Anthropic, local models)
+- [ ] Export/import topics
+- [ ] Study streak tracking
+- [ ] Topic categories/tags
+- [ ] Mobile app (see ANDROID_GUIDE.md)
+- [ ] Web interface

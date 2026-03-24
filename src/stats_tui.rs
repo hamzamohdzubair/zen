@@ -1,431 +1,640 @@
-//! TUI interface for viewing card statistics and analytics
+//! TUI for displaying topic and keyword performance statistics
 
-use anyhow::{Context, Result};
-use chrono::Utc;
+use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, Clear, ClearType},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io;
 
-use crate::database::{get_all_card_stats, get_system_stats, init_database, CardStats, SystemStats};
+use crate::database::{get_keyword_performance_stats, get_keyword_stats, get_topic_performance_stats, get_topic_stats, init_database, KeywordStats, KeywordStatsData, TopicStats, TopicStatsData};
 
-/// Sort order for card list
+/// State machine for the stats TUI
 #[derive(Debug, Clone, PartialEq)]
-enum SortBy {
-    DueDate,
-    ReviewCount,
-    Created,
-    CardId,
+enum StatsState {
+    TopicPerformance,
+    KeywordPerformance,
 }
 
-/// Application state
+/// Stats TUI application
 pub struct StatsApp {
-    system_stats: SystemStats,
-    card_stats: Vec<CardStats>,
-    sort_by: SortBy,
+    state: StatsState,
+    topic_stats: Vec<TopicStatsData>,
+    keyword_stats: Vec<KeywordStatsData>,
+    topic_summary: TopicStats,
+    keyword_summary: KeywordStats,
     scroll_offset: usize,
 }
 
 impl StatsApp {
-    /// Create a new stats app
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<()> {
         let conn = init_database()?;
-        let system_stats = get_system_stats(&conn)?;
-        let mut card_stats = get_all_card_stats(&conn)?;
+        let topic_stats = get_topic_performance_stats(&conn)?;
+        let keyword_stats = get_keyword_performance_stats(&conn)?;
+        let topic_summary = get_topic_stats(&conn)?;
+        let keyword_summary = get_keyword_stats(&conn)?;
 
-        // Default sort by due date
-        card_stats.sort_by_key(|s| s.due_date);
-
-        Ok(Self {
-            system_stats,
-            card_stats,
-            sort_by: SortBy::DueDate,
+        let mut app = Self {
+            state: StatsState::TopicPerformance,
+            topic_stats,
+            keyword_stats,
+            topic_summary,
+            keyword_summary,
             scroll_offset: 0,
-        })
+        };
+
+        app.run()
     }
 
-    /// Run the TUI event loop
-    pub fn run(&mut self) -> Result<()> {
+    fn run(&mut self) -> Result<()> {
         // Setup terminal
-        enable_raw_mode().context("Failed to enable raw mode")?;
-
+        enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, Clear(ClearType::All))
-            .context("Failed to enter alternate screen")?;
-
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
-
-        terminal.hide_cursor().context("Failed to hide cursor")?;
-        terminal.clear().context("Failed to clear terminal")?;
+        let mut terminal = Terminal::new(backend)?;
 
         let result = self.run_event_loop(&mut terminal);
 
-        // Cleanup
-        terminal.show_cursor().context("Failed to show cursor")?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)
-            .context("Failed to leave alternate screen")?;
-        disable_raw_mode().context("Failed to disable raw mode")?;
+        // Restore terminal
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
 
         result
     }
 
-    fn run_event_loop(
-        &mut self,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> Result<()> {
+    fn run_event_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         loop {
-            terminal
-                .draw(|f| self.render(f))
-                .context("Failed to draw frame")?;
+            terminal.draw(|f| self.ui(f))?;
 
-            if event::poll(std::time::Duration::from_millis(100))
-                .context("Failed to poll events")?
-            {
-                if let Event::Key(key) = event::read().context("Failed to read event")? {
-                    if self.handle_key_event(key) {
-                        return Ok(());
+            // Handle user input with 100ms polling
+            if event::poll(std::time::Duration::from_millis(100))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                        break;
+                    }
+
+                    if !self.handle_input(key.code)? {
+                        break;
                     }
                 }
             }
         }
+
+        Ok(())
     }
 
-    fn handle_key_event(&mut self, key: KeyEvent) -> bool {
-        // Ctrl+C or ESC or Q to exit
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return true;
-        }
-        if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
-            return true;
-        }
-
-        match key.code {
-            KeyCode::Char('d') => {
-                self.sort_by = SortBy::DueDate;
-                self.card_stats.sort_by_key(|s| s.due_date);
+    fn handle_input(&mut self, key: KeyCode) -> Result<bool> {
+        match key {
+            KeyCode::Char('q') => Ok(false), // Exit
+            KeyCode::Tab => {
+                // Toggle between screens
+                self.state = match self.state {
+                    StatsState::TopicPerformance => StatsState::KeywordPerformance,
+                    StatsState::KeywordPerformance => StatsState::TopicPerformance,
+                };
                 self.scroll_offset = 0;
+                Ok(true)
             }
-            KeyCode::Char('r') => {
-                self.sort_by = SortBy::ReviewCount;
-                self.card_stats.sort_by(|a, b| b.review_count.cmp(&a.review_count));
-                self.scroll_offset = 0;
+            KeyCode::Up | KeyCode::Char('j') => {
+                if self.scroll_offset > 0 {
+                    self.scroll_offset -= 1;
+                }
+                Ok(true)
             }
-            KeyCode::Char('c') => {
-                self.sort_by = SortBy::Created;
-                self.card_stats.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                self.scroll_offset = 0;
-            }
-            KeyCode::Char('i') => {
-                self.sort_by = SortBy::CardId;
-                self.card_stats.sort_by(|a, b| a.card_id.cmp(&b.card_id));
-                self.scroll_offset = 0;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.scroll_offset < self.card_stats.len().saturating_sub(1) {
+            KeyCode::Down | KeyCode::Char('l') => {
+                let max_scroll = self.get_max_scroll();
+                if self.scroll_offset < max_scroll {
                     self.scroll_offset += 1;
                 }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
-            }
-            KeyCode::PageDown => {
-                self.scroll_offset = (self.scroll_offset + 10).min(self.card_stats.len().saturating_sub(1));
+                Ok(true)
             }
             KeyCode::PageUp => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                Ok(true)
             }
-            _ => {}
+            KeyCode::PageDown => {
+                let max_scroll = self.get_max_scroll();
+                self.scroll_offset = (self.scroll_offset + 10).min(max_scroll);
+                Ok(true)
+            }
+            KeyCode::Home => {
+                self.scroll_offset = 0;
+                Ok(true)
+            }
+            KeyCode::End => {
+                self.scroll_offset = self.get_max_scroll();
+                Ok(true)
+            }
+            _ => Ok(true),
         }
-
-        false // Don't exit
     }
 
-    fn render(&self, frame: &mut Frame) {
-        let area = frame.area();
+    fn get_max_scroll(&self) -> usize {
+        match self.state {
+            StatsState::TopicPerformance => {
+                if self.topic_stats.is_empty() {
+                    0
+                } else {
+                    self.topic_stats.len().saturating_sub(1)
+                }
+            }
+            StatsState::KeywordPerformance => {
+                if self.keyword_stats.is_empty() {
+                    0
+                } else {
+                    self.keyword_stats.len().saturating_sub(1)
+                }
+            }
+        }
+    }
 
-        // Split into sections: title, summary stats, card table, help
-        let chunks = Layout::default()
+    fn ui(&self, f: &mut Frame) {
+        let size = f.area();
+
+        // Main vertical layout
+        let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),  // Title
-                Constraint::Length(7),  // Summary stats
-                Constraint::Min(10),    // Card table
-                Constraint::Length(3),  // Help text
+                Constraint::Min(10),    // Content (will be split horizontally)
+                Constraint::Length(3),  // Legend
+                Constraint::Length(2),  // Status
             ])
-            .split(area);
+            .split(size);
 
-        // Title
-        self.render_title(frame, chunks[0]);
-
-        // Summary stats
-        self.render_summary(frame, chunks[1]);
-
-        // Card table
-        self.render_card_table(frame, chunks[2]);
-
-        // Help text
-        self.render_help(frame, chunks[3]);
-    }
-
-    fn render_title(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let title = Paragraph::new("Card Statistics")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL));
-
-        frame.render_widget(title, area);
-    }
-
-    fn render_summary(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let stats = &self.system_stats;
-
-        let summary_text = vec![
-            Line::from(vec![
-                Span::styled("Total Cards: ", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    stats.total_cards.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                ),
-                Span::raw("  "),
-                Span::styled("Due Today: ", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    stats.due_today.to_string(),
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                ),
-                Span::raw("  "),
-                Span::styled("Total Reviews: ", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    stats.total_reviews.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("New: ", Style::default().fg(Color::Cyan)),
-                Span::styled(
-                    stats.new_cards.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                ),
-                Span::raw("  "),
-                Span::styled("Learning: ", Style::default().fg(Color::Magenta)),
-                Span::styled(
-                    stats.learning_cards.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                ),
-                Span::raw("  "),
-                Span::styled("Mature: ", Style::default().fg(Color::Green)),
-                Span::styled(
-                    stats.mature_cards.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    format!("Average reviews per card: {:.1}",
-                        if stats.total_cards > 0 {
-                            stats.total_reviews as f64 / stats.total_cards as f64
-                        } else {
-                            0.0
-                        }
-                    ),
-                    Style::default().fg(Color::DarkGray)
-                ),
-            ]),
-        ];
-
-        let summary = Paragraph::new(summary_text)
-            .block(Block::default().title(" Summary ").borders(Borders::ALL))
-            .wrap(Wrap { trim: false });
-
-        frame.render_widget(summary, area);
-    }
-
-    fn render_card_table(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let now = Utc::now();
-        let conn = crate::database::init_database();
-
-        // Header
-        let header = Row::new(vec![
-            Cell::from("Question").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Cell::from("Reviews").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Cell::from("Due").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Cell::from("Last 10").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Cell::from("Stability").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Cell::from("Difficulty").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        ]);
-
-        // Calculate how many rows fit in the table area (subtract borders and header)
-        let visible_rows = (area.height as usize).saturating_sub(3);
-
-        // Get the visible slice of cards
-        let end_idx = (self.scroll_offset + visible_rows).min(self.card_stats.len());
-        let visible_cards = &self.card_stats[self.scroll_offset..end_idx];
-
-        // Rows
-        let rows: Vec<Row> = visible_cards
-            .iter()
-            .map(|stat| {
-                // Format due date
-                let due_diff = stat.due_date.signed_duration_since(now);
-                let total_hours = due_diff.num_hours();
-
-                let (due_str, due_color) = if total_hours < -48 {
-                    // Overdue by more than 48 hours - seriously overdue (RED)
-                    (format!("{}d ago", -due_diff.num_days()), Color::Red)
-                } else if total_hours < 0 {
-                    // Overdue by 0-48 hours - fresh review window (GREEN)
-                    (format!("{}h ago", -total_hours), Color::Green)
-                } else if total_hours < 48 {
-                    // Due within 48 hours - show in hours (YELLOW)
-                    (format!("in {}h", total_hours), Color::Yellow)
-                } else {
-                    // Due later - show in days (YELLOW)
-                    (format!("in {}d", due_diff.num_days()), Color::Yellow)
-                };
-
-                // Get last 10 ratings with color coding
-                let rating_history = if let Ok(ref conn) = conn {
-                    if let Ok(logs) = crate::database::get_review_logs(conn, &stat.card_id) {
-                        let mut spans = vec![];
-
-                        // Pad with X if less than 10 reviews
-                        let padding_count = 10usize.saturating_sub(logs.len());
-                        for _ in 0..padding_count {
-                            spans.push(Span::styled("X", Style::default().fg(Color::DarkGray)));
-                        }
-
-                        // Take last 10 reviews
-                        let recent_logs = if logs.len() > 10 {
-                            &logs[logs.len() - 10..]
-                        } else {
-                            &logs[..]
-                        };
-
-                        for log in recent_logs {
-                            let (ch, color) = match log.rating {
-                                1 => ('A', Color::Red),
-                                2 => ('H', Color::Yellow),
-                                3 => ('G', Color::Green),
-                                4 => ('E', Color::Cyan),
-                                _ => ('?', Color::White),
-                            };
-                            spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-                        }
-
-                        Line::from(spans)
-                    } else {
-                        Line::from("XXXXXXXXXX")
-                    }
-                } else {
-                    Line::from("XXXXXXXXXX")
-                };
-
-                // Get question text from storage
-                let question_preview = if let Ok((question, _)) = crate::storage::read_card(&stat.card_id) {
-                    if question.len() > 30 {
-                        format!("{}...", &question[..27])
-                    } else {
-                        question
-                    }
-                } else {
-                    "Error loading".to_string()
-                };
-
-                // Review count color
-                let review_color = if stat.review_count == 0 {
-                    Color::DarkGray
-                } else if stat.review_count < 5 {
-                    Color::Yellow
-                } else {
-                    Color::Green
-                };
-
-                Row::new(vec![
-                    Cell::from(question_preview).style(Style::default().fg(Color::White)),
-                    Cell::from(stat.review_count.to_string())
-                        .style(Style::default().fg(review_color).add_modifier(Modifier::BOLD)),
-                    Cell::from(due_str).style(Style::default().fg(due_color)),
-                    Cell::from(rating_history),
-                    Cell::from(
-                        stat.stability
-                            .map(|s| format!("{:.1}", s))
-                            .unwrap_or_else(|| "-".to_string())
-                    )
-                    .style(Style::default().fg(Color::DarkGray)),
-                    Cell::from(
-                        stat.difficulty
-                            .map(|d| format!("{:.1}", d))
-                            .unwrap_or_else(|| "-".to_string())
-                    )
-                    .style(Style::default().fg(Color::DarkGray)),
-                ])
-            })
-            .collect();
-
-        let sort_indicator = match self.sort_by {
-            SortBy::DueDate => " (sorted by Due Date)",
-            SortBy::ReviewCount => " (sorted by Review Count)",
-            SortBy::Created => " (sorted by Creation Date)",
-            SortBy::CardId => " (sorted by Card ID)",
+        // Render title
+        let title = match self.state {
+            StatsState::TopicPerformance => "Topic Performance",
+            StatsState::KeywordPerformance => "Keyword Performance",
         };
+        self.render_title(f, main_chunks[0], title);
 
-        let title = format!(
-            " Cards ({}/{}){}",
-            self.scroll_offset + 1,
-            self.card_stats.len().max(1),
-            sort_indicator
+        // Split content area horizontally (main content on left, stats table on right)
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(60),     // Main content
+                Constraint::Length(33),  // Stats table on right
+            ])
+            .split(main_chunks[1]);
+
+        match self.state {
+            StatsState::TopicPerformance => {
+                self.render_topic_list(f, content_chunks[0]);
+                self.render_topic_legend(f, main_chunks[2]);
+            }
+            StatsState::KeywordPerformance => {
+                self.render_keyword_list(f, content_chunks[0]);
+                self.render_keyword_legend(f, main_chunks[2]);
+            }
+        }
+
+        // Render stats table on right side
+        self.render_stats_table(f, content_chunks[1]);
+
+        self.render_status(f, main_chunks[3], "Tab: Switch View | q: Quit | ↑↓/jl: Scroll | PgUp/PgDn/Home/End");
+    }
+
+    fn render_title(&self, f: &mut Frame, area: Rect, title: &str) {
+        let title_span = Span::styled(
+            format!(" {} ", title),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         );
 
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(30), // Question
-                Constraint::Length(8),  // Reviews
-                Constraint::Length(10), // Due
-                Constraint::Length(10), // Last 10 ratings
-                Constraint::Length(10), // Stability
-                Constraint::Length(12), // Difficulty
-            ],
-        )
-        .header(header)
-        .block(Block::default().title(title).borders(Borders::ALL))
-        .column_spacing(1);
+        let paragraph = Paragraph::new(Line::from(title_span))
+            .alignment(Alignment::Center);
 
-        frame.render_widget(table, area);
+        f.render_widget(paragraph, area);
     }
 
-    fn render_help(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let help_text = Line::from(vec![
-            Span::styled("[q/Esc] ", Style::default().fg(Color::Yellow)),
-            Span::raw("Exit  "),
-            Span::styled("[↑↓/jk] ", Style::default().fg(Color::Yellow)),
-            Span::raw("Scroll  "),
-            Span::styled("[d] ", Style::default().fg(Color::Yellow)),
-            Span::raw("Sort by Due  "),
-            Span::styled("[r] ", Style::default().fg(Color::Yellow)),
-            Span::raw("Sort by Reviews  "),
-            Span::styled("[c] ", Style::default().fg(Color::Yellow)),
-            Span::raw("Sort by Created  "),
-            Span::styled("[i] ", Style::default().fg(Color::Yellow)),
-            Span::raw("Sort by ID"),
-        ]);
+    fn render_stats_table(&self, f: &mut Frame, area: Rect) {
+        let mut lines = Vec::new();
 
-        let help = Paragraph::new(help_text)
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL));
+        // Header row
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:14}", ""), Style::default()),
+            Span::styled(format!("{:7}", "Topic"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:7}", "kw"), Style::default().add_modifier(Modifier::BOLD)),
+        ]));
 
-        frame.render_widget(help, area);
+        lines.push(Line::from("─".repeat(28)));
+
+        // Total row
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:14}", "Total"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{:7}", self.topic_summary.total)),
+            Span::raw(format!("{:7}", self.keyword_summary.total_keywords)),
+        ]));
+
+        // Due Today row
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:14}", "Due Today"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{:7}", self.topic_summary.due_today)),
+            Span::raw(format!("{:7}", self.keyword_summary.due_today)),
+        ]));
+
+        // Due This Week row
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:14}", "Due Week"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{:7}", self.topic_summary.due_week)),
+            Span::raw(format!("{:7}", self.keyword_summary.due_week)),
+        ]));
+
+        lines.push(Line::from("─".repeat(28)));
+
+        // Reviews row
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:14}", "Reviews"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{:14}", self.topic_summary.reviews_completed)),
+        ]));
+
+        // Average Score row
+        let topic_avg_color = score_to_color(self.topic_summary.average_score);
+        let keyword_avg_color = score_to_color(self.keyword_summary.average_score);
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:14}", "Avg Score"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{:6.1}%", self.topic_summary.average_score),
+                Style::default().fg(topic_avg_color)
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("{:6.1}%", self.keyword_summary.average_score),
+                Style::default().fg(keyword_avg_color)
+            ),
+        ]));
+
+        let block = Block::default()
+            .title("Statistics")
+            .borders(Borders::ALL)
+            .style(Style::default());
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_topic_list(&self, f: &mut Frame, area: Rect) {
+        if self.topic_stats.is_empty() {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default());
+
+            let paragraph = Paragraph::new("No review data yet. Complete some reviews to see statistics.")
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(paragraph, area);
+            return;
+        }
+
+        // Define column widths
+        const COL_KEYWORDS: usize = 29;  // 28 chars + 1 space
+        const COL_LAST: usize = 5;       // 5 chars for score
+        const COL_AVG: usize = 5;        // 5 chars for score
+        const COL_SPACING: usize = 2;    // 2 spaces between columns
+        const INDENT_WIDTH: usize = COL_KEYWORDS + COL_LAST + COL_SPACING + COL_AVG + COL_SPACING;
+
+        let mut lines = Vec::new();
+
+        // Header row
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:29}", "Keywords"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:5}", "Last"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(format!("{:5}", "Avg"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("Recent Sessions", Style::default().add_modifier(Modifier::BOLD)),
+        ]));
+
+        lines.push(Line::from("─".repeat(area.width as usize - 2)));
+
+        // Calculate visible window (each topic takes 4 lines: 1 header + 3 matrix rows)
+        let content_height = (area.height as usize).saturating_sub(4); // Minus border and header
+        let items_per_topic = 4;
+        let visible_topics = content_height / items_per_topic;
+        let start_idx = self.scroll_offset;
+        let end_idx = (start_idx + visible_topics).min(self.topic_stats.len());
+
+        for topic in &self.topic_stats[start_idx..end_idx] {
+            // Format keywords (truncate if needed)
+            let keywords_str = topic.keywords.join(", ");
+            let keywords_display = if keywords_str.len() > 28 {
+                format!("{:25}...", &keywords_str[..25])
+            } else {
+                format!("{:28}", keywords_str)
+            };
+
+            // Format scores
+            let last_score = if let Some(score) = topic.last_session_score {
+                format!("{:5.1}", score)
+            } else {
+                "  -  ".to_string()
+            };
+
+            let avg_score = format!("{:5.1}", topic.overall_average_score);
+
+            // Color based on average score
+            let score_color = score_to_color(topic.overall_average_score);
+
+            // Build rating matrix as 3 lines (3 questions per column, 10 columns max)
+            let matrix_lines = self.render_topic_rating_matrix(&topic.recent_sessions);
+
+            // First line with all info
+            let mut first_line_spans = vec![
+                Span::raw(format!("{:29}", keywords_display)),
+                Span::styled(format!("{:5}", last_score), Style::default().fg(score_color)),
+                Span::raw("  "),
+                Span::styled(format!("{:5}", avg_score), Style::default().fg(score_color)),
+                Span::raw("  "),
+            ];
+            first_line_spans.extend(matrix_lines[0].clone());
+            lines.push(Line::from(first_line_spans));
+
+            // Second and third lines (indented to align with matrix)
+            for i in 1..3 {
+                let mut line_spans = vec![Span::raw(" ".repeat(INDENT_WIDTH))];
+                line_spans.extend(matrix_lines[i].clone());
+                lines.push(Line::from(line_spans));
+            }
+
+            // Add blank line between topics for readability
+            lines.push(Line::from(""));
+        }
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default());
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_topic_rating_matrix(&self, sessions: &[crate::database::ReviewSession]) -> [Vec<Span<'static>>; 3] {
+        let mut lines: [Vec<Span>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+
+        const MATRIX_WIDTH: usize = 10; // 10 columns
+        const ROWS: usize = 3; // 3 rows (questions)
+
+        // Get up to 10 most recent sessions
+        let sessions_to_show: Vec<_> = sessions.iter().take(MATRIX_WIDTH).collect();
+        let num_sessions = sessions_to_show.len();
+
+        // Calculate how many placeholder columns we need on the left
+        let placeholder_cols = MATRIX_WIDTH - num_sessions;
+
+        // Fill each row
+        for row_idx in 0..ROWS {
+            // Add placeholder dots on the left
+            for col_idx in 0..placeholder_cols {
+                lines[row_idx].push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                // Add space after each column except the last
+                if col_idx < placeholder_cols - 1 || num_sessions > 0 {
+                    lines[row_idx].push(Span::raw(" "));
+                }
+            }
+
+            // Add actual session data from the right (most recent on the right)
+            for (session_idx, session) in sessions_to_show.iter().enumerate() {
+                // Get the question for this row
+                if row_idx < session.questions.len() {
+                    lines[row_idx].push(get_colored_symbol(session.questions[row_idx].rating));
+                } else {
+                    // Session has fewer than 3 questions, use placeholder
+                    lines[row_idx].push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                }
+
+                // Add space after each column except the last
+                if session_idx < num_sessions - 1 {
+                    lines[row_idx].push(Span::raw(" "));
+                }
+            }
+        }
+
+        lines
+    }
+
+    fn render_keyword_rating_matrix(&self, topic_reviews: &[crate::database::KeywordTopicReview]) -> [Vec<Span<'static>>; 3] {
+        let mut lines: [Vec<Span>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+
+        const MATRIX_WIDTH: usize = 10; // 10 columns (topics)
+        const ROWS: usize = 3; // 3 rows (questions)
+
+        // Get up to 10 topics
+        let topics_to_show: Vec<_> = topic_reviews.iter().take(MATRIX_WIDTH).collect();
+        let num_topics = topics_to_show.len();
+
+        // Calculate how many placeholder columns we need on the left
+        let placeholder_cols = MATRIX_WIDTH - num_topics;
+
+        // Fill each row
+        for row_idx in 0..ROWS {
+            // Add placeholder dots on the left
+            for col_idx in 0..placeholder_cols {
+                lines[row_idx].push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                // Add space after each column except the last
+                if col_idx < placeholder_cols - 1 || num_topics > 0 {
+                    lines[row_idx].push(Span::raw(" "));
+                }
+            }
+
+            // Add actual topic data from the right (most recent on the right)
+            for (topic_idx, topic_review) in topics_to_show.iter().enumerate() {
+                // Get the most recent session for this topic
+                if let Some(session) = topic_review.recent_sessions.first() {
+                    // Get the question for this row
+                    if row_idx < session.questions.len() {
+                        lines[row_idx].push(get_colored_symbol(session.questions[row_idx].rating));
+                    } else {
+                        // Session has fewer than 3 questions, use placeholder
+                        lines[row_idx].push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                    }
+                } else {
+                    // No sessions for this topic
+                    lines[row_idx].push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                }
+
+                // Add space after each column except the last
+                if topic_idx < num_topics - 1 {
+                    lines[row_idx].push(Span::raw(" "));
+                }
+            }
+        }
+
+        lines
+    }
+
+    fn render_topic_legend(&self, f: &mut Frame, area: Rect) {
+        let text = "✓=Easy ≥90  -=Good/Hard 60-89  ✗=Again <60  ·=No data";
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::DarkGray));
+
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .alignment(Alignment::Center);
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_keyword_list(&self, f: &mut Frame, area: Rect) {
+        if self.keyword_stats.is_empty() {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default());
+
+            let paragraph = Paragraph::new("No review data yet. Complete some reviews to see statistics.")
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(paragraph, area);
+            return;
+        }
+
+        // Define column widths
+        const COL_KEYWORD: usize = 29;   // 28 chars + 1 space
+        const COL_TOPICS: usize = 7;     // 6 chars + 1 space
+        const COL_AVG: usize = 5;        // 5 chars for score
+        const COL_SPACING: usize = 2;    // 2 spaces between columns
+        const INDENT_WIDTH: usize = COL_KEYWORD + COL_TOPICS + COL_AVG + COL_SPACING;
+
+        let mut lines = Vec::new();
+
+        // Header row
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:29}", "Keyword"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:7}", "Topics"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:5}", "Avg"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("Performance by Topic", Style::default().add_modifier(Modifier::BOLD)),
+        ]));
+
+        lines.push(Line::from("─".repeat(area.width as usize - 2)));
+
+        // Calculate visible window (each keyword takes 4 lines: 1 header + 3 matrix rows)
+        let content_height = (area.height as usize).saturating_sub(4);
+        let items_per_keyword = 4;
+        let visible_keywords = content_height / items_per_keyword;
+        let start_idx = self.scroll_offset;
+        let end_idx = (start_idx + visible_keywords).min(self.keyword_stats.len());
+
+        for keyword in &self.keyword_stats[start_idx..end_idx] {
+            // Format keyword (truncate if needed)
+            let keyword_display = if keyword.keyword.len() > 28 {
+                format!("{:25}...", &keyword.keyword[..25])
+            } else {
+                format!("{:28}", keyword.keyword)
+            };
+
+            let topics_display = format!("{:6}", keyword.topic_count);
+            let avg_display = format!("{:5.1}", keyword.average_score);
+            let score_color = score_to_color(keyword.average_score);
+
+            // Build rating matrix showing performance across topics
+            let matrix_lines = self.render_keyword_rating_matrix(&keyword.topic_reviews);
+
+            // First line with all info
+            let mut first_line_spans = vec![
+                Span::raw(format!("{:29}", keyword_display)),
+                Span::raw(format!("{:7}", topics_display)),
+                Span::styled(format!("{:5}", avg_display), Style::default().fg(score_color)),
+                Span::raw("  "),
+            ];
+            first_line_spans.extend(matrix_lines[0].clone());
+            lines.push(Line::from(first_line_spans));
+
+            // Second and third lines (indented to align with matrix)
+            for i in 1..3 {
+                let mut line_spans = vec![Span::raw(" ".repeat(INDENT_WIDTH))];
+                line_spans.extend(matrix_lines[i].clone());
+                lines.push(Line::from(line_spans));
+            }
+
+            // Add blank line between keywords for readability
+            lines.push(Line::from(""));
+        }
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default());
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_keyword_legend(&self, f: &mut Frame, area: Rect) {
+        let text = "✓=Easy ≥90  -=Good/Hard 60-89  ✗=Again <60  ·=No data";
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::DarkGray));
+
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .alignment(Alignment::Center);
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_status(&self, f: &mut Frame, area: Rect, instructions: &str) {
+        let paragraph = Paragraph::new(instructions)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+
+        f.render_widget(paragraph, area);
     }
 }
+
+/// Map score to color (standardized with rating boundaries)
+fn score_to_color(score: f64) -> Color {
+    if score >= 90.0 {
+        Color::Green  // Easy
+    } else if score >= 70.0 {
+        Color::Yellow  // Good
+    } else if score >= 60.0 {
+        Color::Yellow  // Hard
+    } else {
+        Color::Red  // Again
+    }
+}
+
+/// Get colored symbol for rating
+fn get_colored_symbol(rating: u8) -> Span<'static> {
+    match rating {
+        4 => Span::styled("✓", Style::default().fg(Color::Green)),   // Easy (≥90)
+        3 => Span::styled("-", Style::default().fg(Color::Yellow)),  // Good (70-89)
+        2 => Span::styled("-", Style::default().fg(Color::Yellow)),  // Hard (60-69)
+        1 => Span::styled("✗", Style::default().fg(Color::Red)),     // Again (<60)
+        _ => Span::raw(" "),
+    }
+}
+

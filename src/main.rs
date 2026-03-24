@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "zen")]
-#[command(about = "A spaced repetition CLI for active recall", long_about = None)]
+#[command(about = "A topic-based spaced repetition CLI with LLM-powered reviews", long_about = None)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -12,50 +12,56 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create a new flashcard (launches TUI)
-    #[command(name = "new")]
-    New,
-
-    /// Find and edit cards (interactive fuzzy search)
-    #[command(name = "find", alias = "f")]
-    Find {
-        /// Optional initial search query (can also type in the interactive search)
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        query: Option<Vec<String>>,
+    /// Add a new topic with comma-separated keywords
+    #[command(name = "add")]
+    Add {
+        /// Comma-separated keywords (spaces allowed within keywords)
+        /// Example: "AI, machine learning" or "LSTM"
+        keywords: String,
     },
 
-    /// Start a review session
+    /// Start a topic review session
     #[command(name = "start")]
     Start,
 
-    /// Show statistics
+    /// Show detailed statistics (TUI)
     #[command(name = "stats")]
     Stats,
 
-    /// List all cards
-    #[command(name = "list")]
-    List,
+    /// List all topics
+    #[command(name = "topics")]
+    Topics {
+        /// Show only due topics
+        #[arg(long)]
+        due: bool,
+    },
+
+    /// Delete a topic
+    #[command(name = "delete")]
+    Delete {
+        /// Topic ID to delete
+        topic_id: String,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::New => {
-            zen::commands::new_card()?;
-        }
-        Commands::Find { query } => {
-            let query_text = query.map(|q| q.join(" ")).unwrap_or_default();
-            zen::commands::find_cards(&query_text)?;
+        Commands::Add { keywords } => {
+            zen::commands::add_topic(&keywords)?;
         }
         Commands::Start => {
-            zen::commands::start_review()?;
+            zen::commands::start_topic_review()?;
         }
         Commands::Stats => {
-            zen::commands::show_stats()?;
+            zen::commands::show_stats_tui()?;
         }
-        Commands::List => {
-            println!("List command not yet implemented.");
+        Commands::Topics { due } => {
+            zen::commands::list_topics(due)?;
+        }
+        Commands::Delete { topic_id } => {
+            zen::commands::delete_topic(&topic_id)?;
         }
     }
 
