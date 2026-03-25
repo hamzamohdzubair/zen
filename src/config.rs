@@ -9,9 +9,17 @@ pub struct LLMConfig {
     pub model: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WebSearchConfig {
+    /// Provider: "tavily", "brave", "serper", or "serpapi"
+    pub provider: String,
+    pub api_key: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub llm: Option<LLMConfig>,
+    pub web_search: Option<WebSearchConfig>,
 }
 
 impl Config {
@@ -87,6 +95,7 @@ mod tests {
                 api_key: "test_key".to_string(),
                 model: "llama-3.3-70b-versatile".to_string(),
             }),
+            web_search: None,
         };
 
         let toml_str = toml::to_string(&config).unwrap();

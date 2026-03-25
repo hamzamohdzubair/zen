@@ -158,7 +158,7 @@ pub fn insert_initial_topic_schedule(
 pub fn get_due_topics(conn: &Connection) -> Result<Vec<String>> {
     let now = Utc::now().to_rfc3339();
     let mut stmt = conn.prepare(
-        "SELECT topic_id FROM topic_schedule
+        "SELECT DISTINCT topic_id FROM topic_schedule
          WHERE due_date <= ?1
          ORDER BY due_date ASC",
     )?;
@@ -292,21 +292,148 @@ pub fn insert_topic_question_log(
 /// Get previous questions asked for a topic (for breadth coverage)
 /// Only returns questions from reviews that were rated "Easy" (rating = 4)
 /// to avoid repeating questions the user already found easy
+/// Get questions from "Easy" (rating=4) sessions in the last 10 days for a topic
 pub fn get_topic_previous_questions(conn: &Connection, topic_id: &str, limit: usize) -> Result<Vec<String>> {
+    // Calculate timestamp for 10 days ago
+    let ten_days_ago = (Utc::now() - chrono::Duration::days(10)).to_rfc3339();
+
     let mut stmt = conn.prepare(
         "SELECT tql.generated_question
          FROM topic_question_logs tql
          JOIN topic_review_logs trl ON tql.review_log_id = trl.id
-         WHERE trl.topic_id = ?1 AND trl.rating = 4
+         WHERE trl.topic_id = ?1
+           AND trl.rating = 4
+           AND trl.timestamp >= ?2
          ORDER BY trl.timestamp DESC
-         LIMIT ?2"
+         LIMIT ?3"
     )?;
 
     let questions = stmt
-        .query_map(params![topic_id, limit], |row| row.get(0))?
+        .query_map(params![topic_id, ten_days_ago, limit], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
 
     Ok(questions)
+}
+
+/// Get count of questions answered today for a topic
+pub fn get_today_question_count(conn: &Connection, topic_id: &str) -> Result<usize> {
+    let today_start = Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .to_rfc3339();
+
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM topic_question_logs tql
+         JOIN topic_review_logs trl ON tql.review_log_id = trl.id
+         WHERE trl.topic_id = ?1 AND trl.timestamp >= ?2",
+        params![topic_id, today_start],
+        |row| row.get(0),
+    )?;
+
+    Ok(count as usize)
+}
+
+/// Get today's question scores for a topic (returns up to 3 scores)
+pub fn get_today_question_scores(conn: &Connection, topic_id: &str) -> Result<Vec<f64>> {
+    let today_start = Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT tql.llm_score
+         FROM topic_question_logs tql
+         JOIN topic_review_logs trl ON tql.review_log_id = trl.id
+         WHERE trl.topic_id = ?1 AND trl.timestamp >= ?2
+         ORDER BY tql.question_number ASC",
+    )?;
+
+    let scores = stmt
+        .query_map(params![topic_id, today_start], |row| row.get(0))?
+        .collect::<Result<Vec<f64>, _>>()?;
+
+    Ok(scores)
+}
+
+/// Get ALL questions asked today (for any topic) to avoid repetition within the same day
+pub fn get_all_questions_asked_today(conn: &Connection) -> Result<Vec<String>> {
+    let today_start = Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT tql.generated_question
+         FROM topic_question_logs tql
+         JOIN topic_review_logs trl ON tql.review_log_id = trl.id
+         WHERE trl.timestamp >= ?1
+         ORDER BY trl.timestamp DESC",
+    )?;
+
+    let questions = stmt
+        .query_map(params![today_start], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+
+    Ok(questions)
+}
+
+/// Find a topic by its keywords (returns topic_id if found)
+pub fn find_topic_by_keywords(conn: &Connection, keywords: &[String]) -> Result<Option<String>> {
+    // Get all topics
+    let all_topics = get_all_topics(conn)?;
+
+    // Normalize the input keywords for comparison (sort and join)
+    let mut normalized_input = keywords.to_vec();
+    normalized_input.sort();
+    let input_key = normalized_input.join(",").to_lowercase();
+
+    // Check each topic
+    for topic in all_topics {
+        let mut topic_keywords = topic.keywords.clone();
+        topic_keywords.sort();
+        let topic_key = topic_keywords.join(",").to_lowercase();
+
+        if topic_key == input_key {
+            return Ok(Some(topic.id));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Create a placeholder review log for a topic (to be updated when complete)
+pub fn create_topic_review_session(conn: &Connection, topic_id: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO topic_review_logs (topic_id, timestamp, rating, scheduled_days, elapsed_days, average_score)
+         VALUES (?1, ?2, 0, 0, 0, 0.0)",
+        params![topic_id, Utc::now().to_rfc3339()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Update an existing review log with final FSRS values
+pub fn update_review_log(
+    conn: &Connection,
+    review_log_id: i64,
+    rating: u8,
+    scheduled_days: f64,
+    elapsed_days: f64,
+    average_score: f64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE topic_review_logs
+         SET rating = ?1, scheduled_days = ?2, elapsed_days = ?3, average_score = ?4
+         WHERE id = ?5",
+        params![rating as i32, scheduled_days, elapsed_days, average_score, review_log_id],
+    )?;
+    Ok(())
 }
 
 /// Delete a topic and all associated data (cascades automatically)
@@ -616,6 +743,30 @@ pub fn get_topic_performance_stats(conn: &Connection) -> Result<Vec<TopicStatsDa
     });
 
     Ok(results)
+}
+
+/// Get dates when reviews were completed (for calendar display)
+pub fn get_review_dates(conn: &Connection) -> Result<Vec<chrono::NaiveDate>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT DATE(timestamp) as review_date
+         FROM topic_review_logs
+         WHERE rating > 0
+         ORDER BY review_date DESC"
+    )?;
+
+    let dates = stmt
+        .query_map([], |row| {
+            let date_str: String = row.get(0)?;
+            Ok(date_str)
+        })?
+        .filter_map(|result| {
+            result.ok().and_then(|date_str| {
+                chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").ok()
+            })
+        })
+        .collect();
+
+    Ok(dates)
 }
 
 /// Get keyword statistics summary

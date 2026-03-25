@@ -48,6 +48,9 @@ nucleo-matcher = "0.3"
 # Content hashing for edit detection
 sha2 = "0.10"
 
+# Table formatting
+tabled = "0.16"
+
 # BERT scoring
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["half", "download-binaries", "tls-rustls"] }
 tokenizers = "0.20"

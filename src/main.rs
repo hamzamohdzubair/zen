@@ -37,7 +37,7 @@ enum Commands {
     },
 
     /// Delete a topic
-    #[command(name = "delete")]
+    #[command(name = "del")]
     Delete {
         /// Topic ID to delete
         topic_id: String,

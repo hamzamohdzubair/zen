@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::Utc;
+use tabled::{Table, Tabled, settings::Style};
 
 /// Add a new topic with comma-separated keywords
 pub fn add_topic(keywords_str: &str) -> Result<()> {
@@ -25,12 +26,20 @@ pub fn add_topic(keywords_str: &str) -> Result<()> {
         anyhow::bail!("Maximum 20 keywords per topic");
     }
 
+    // Check for existing topic with same keywords
+    let conn = crate::database::init_database()?;
+    if let Some(existing_id) = crate::database::find_topic_by_keywords(&conn, &keywords)? {
+        println!("✗ Topic already exists with ID: {}", existing_id);
+        println!("  Keywords: {}", keywords.join(", "));
+        println!("\nTip: Use 'zen del {}' to remove it if needed", existing_id);
+        anyhow::bail!("Topic with these keywords already exists");
+    }
+
     // Create topic
     let topic_id = crate::topic::generate_unique_topic_id()?;
     let now = Utc::now();
 
     // Save to database
-    let conn = crate::database::init_database()?;
     crate::database::insert_topic(&conn, &topic_id, &now.to_rfc3339(), &now.to_rfc3339())?;
     crate::database::insert_topic_keywords(&conn, &topic_id, &keywords)?;
 
@@ -85,6 +94,19 @@ pub fn show_topic_stats() -> Result<()> {
     Ok(())
 }
 
+/// Table row for displaying topic information
+#[derive(Tabled)]
+struct TopicTableRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "Keywords")]
+    keywords: String,
+    #[tabled(rename = "Status")]
+    status: String,
+    #[tabled(rename = "Created")]
+    created: String,
+}
+
 /// List all topics or only due topics
 pub fn list_topics(due_only: bool) -> Result<()> {
     let conn = crate::database::init_database()?;
@@ -104,36 +126,60 @@ pub fn list_topics(due_only: bool) -> Result<()> {
     }
 
     let title = if due_only { "Due Topics" } else { "All Topics" };
-    println!("\n{}", title);
-    println!("{}", "=".repeat(title.len()));
-    println!();
+
+    // Build table rows
+    let now = Utc::now();
+    let mut rows = Vec::new();
 
     for topic in topics {
         let keywords_display = topic.keywords.join(", ");
-        let keywords_display = if keywords_display.len() > 60 {
-            format!("{}...", &keywords_display[..57])
+        let keywords_display = if keywords_display.len() > 80 {
+            format!("{}...", &keywords_display[..77])
         } else {
             keywords_display
         };
 
-        // Format due date
-        let now = Utc::now();
-        let due_str = if topic.due_date <= now {
-            "Due now".to_string()
+        // Format due date with color indicators
+        let status = if topic.due_date <= now {
+            "🔴 Due now".to_string()
         } else {
             let days = (topic.due_date - now).num_days();
             if days == 0 {
-                "Due today".to_string()
+                "🔴 Due today".to_string()
             } else if days == 1 {
-                "Due tomorrow".to_string()
+                "🟡 Due tomorrow".to_string()
+            } else if days <= 3 {
+                format!("🟡 Due in {} days", days)
+            } else if days <= 7 {
+                format!("🟢 Due in {} days", days)
             } else {
-                format!("Due in {} days", days)
+                format!("⚪ Due in {} days", days)
             }
         };
 
-        println!("  {} | {} | {}", topic.id, keywords_display, due_str);
+        // Format created date
+        let created = topic.created_at.format("%Y-%m-%d").to_string();
+
+        rows.push(TopicTableRow {
+            id: topic.id,
+            keywords: keywords_display,
+            status,
+            created,
+        });
     }
-    println!();
+
+    // Create and display table
+    let total_count = rows.len();
+
+    println!("\n╔══════════════════════════════════════════════════════════╗");
+    println!("║  {}{}║", title, " ".repeat(56 - title.len()));
+    println!("╚══════════════════════════════════════════════════════════╝\n");
+
+    let mut table = Table::new(rows);
+    table.with(Style::modern());
+
+    println!("{}", table);
+    println!("\n📊 Total: {} topic(s)\n", total_count);
 
     Ok(())
 }

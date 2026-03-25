@@ -6,6 +6,7 @@ A modern spaced repetition CLI that uses LLM-powered question generation and eva
 
 - **Topic-Based Learning**: Organize knowledge by keywords instead of individual flashcards
 - **LLM-Powered Questions**: Fresh questions generated for each review session
+- **Web-Enhanced Questions** (Optional): LLM can search the web for up-to-date information when generating questions
 - **Automatic Grading**: LLM evaluates your answers and provides detailed feedback
 - **FSRS Scheduling**: Advanced spaced repetition algorithm for optimal review timing
 - **3-Question Review**: Each topic tested with 3 different questions per session
@@ -292,6 +293,34 @@ provider = "groq"
 api_key = "your-api-key"
 model = "llama-3.3-70b-versatile"
 ```
+
+### Web Search (Optional)
+
+**NEW**: Enable web search to generate questions with current, up-to-date information!
+
+The LLM can automatically search the web when it needs recent information about:
+- Rapidly changing technologies (frameworks, tools, languages)
+- Current best practices and standards
+- Latest versions and features
+- Recent developments and news
+
+Add to `~/.zen/config.toml`:
+
+```toml
+[web_search]
+provider = "tavily"  # or "brave", "serper", "serpapi"
+api_key = "your-search-api-key"
+```
+
+**Supported providers** (all have free tiers):
+- **Tavily** (recommended) - 1,000 free searches/month - [tavily.com](https://tavily.com)
+- **Brave Search** - 2,000 free queries/month - [brave.com/search/api](https://brave.com/search/api/)
+- **Serper** - 2,500 free queries - [serper.dev](https://serper.dev)
+- **SerpAPI** - 100 free searches/month - [serpapi.com](https://serpapi.com)
+
+The LLM intelligently decides when to search - it won't search for evergreen topics like "What is a variable?" but will search for "Latest React 19 features" or "Python 3.13 new syntax".
+
+**📖 See [WEB_SEARCH_SETUP.md](WEB_SEARCH_SETUP.md) for detailed setup instructions.**
 
 ### Data Location
 

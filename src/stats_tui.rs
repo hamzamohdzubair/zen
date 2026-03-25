@@ -17,6 +17,7 @@ use ratatui::{
 use std::io;
 
 use crate::database::{get_keyword_performance_stats, get_keyword_stats, get_topic_performance_stats, get_topic_stats, init_database, KeywordStats, KeywordStatsData, TopicStats, TopicStatsData};
+use chrono::{Datelike, Local, NaiveDate, Weekday};
 
 /// State machine for the stats TUI
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +33,7 @@ pub struct StatsApp {
     keyword_stats: Vec<KeywordStatsData>,
     topic_summary: TopicStats,
     keyword_summary: KeywordStats,
+    review_dates: Vec<NaiveDate>,
     scroll_offset: usize,
 }
 
@@ -42,6 +44,7 @@ impl StatsApp {
         let keyword_stats = get_keyword_performance_stats(&conn)?;
         let topic_summary = get_topic_stats(&conn)?;
         let keyword_summary = get_keyword_stats(&conn)?;
+        let review_dates = crate::database::get_review_dates(&conn)?;
 
         let mut app = Self {
             state: StatsState::TopicPerformance,
@@ -49,6 +52,7 @@ impl StatsApp {
             keyword_stats,
             topic_summary,
             keyword_summary,
+            review_dates,
             scroll_offset: 0,
         };
 
@@ -184,14 +188,23 @@ impl StatsApp {
         };
         self.render_title(f, main_chunks[0], title);
 
-        // Split content area horizontally (main content on left, stats table on right)
+        // Split content area horizontally (main content on left, stats/calendar on right)
         let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Min(60),     // Main content
-                Constraint::Length(33),  // Stats table on right
+                Constraint::Length(33),  // Stats table + calendar on right
             ])
             .split(main_chunks[1]);
+
+        // Split right column vertically (stats table on top, calendar below)
+        let right_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(12),  // Stats table
+                Constraint::Min(10),     // Calendar
+            ])
+            .split(content_chunks[1]);
 
         match self.state {
             StatsState::TopicPerformance => {
@@ -204,8 +217,9 @@ impl StatsApp {
             }
         }
 
-        // Render stats table on right side
-        self.render_stats_table(f, content_chunks[1]);
+        // Render stats table and calendar on right side
+        self.render_stats_table(f, right_chunks[0]);
+        self.render_calendar(f, right_chunks[1]);
 
         self.render_status(f, main_chunks[3], "Tab: Switch View | q: Quit | ↑↓/jl: Scroll | PgUp/PgDn/Home/End");
     }
@@ -609,6 +623,116 @@ impl StatsApp {
         let paragraph = Paragraph::new(instructions)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_calendar(&self, f: &mut Frame, area: Rect) {
+        let mut lines = Vec::new();
+
+        // Get current month info
+        let today = Local::now().naive_local().date();
+        let year = today.year();
+        let month = today.month();
+
+        // Month header
+        let month_name = match month {
+            1 => "January", 2 => "February", 3 => "March", 4 => "April",
+            5 => "May", 6 => "June", 7 => "July", 8 => "August",
+            9 => "September", 10 => "October", 11 => "November", 12 => "December",
+            _ => "Unknown",
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} {}", month_name, year),
+                Style::default().add_modifier(Modifier::BOLD)
+            ),
+        ]));
+        lines.push(Line::from(""));
+
+        // Day headers (Su Mo Tu We Th Fr Sa)
+        lines.push(Line::from(vec![
+            Span::styled("Su Mo Tu We Th Fr Sa", Style::default().add_modifier(Modifier::BOLD)),
+        ]));
+
+        // Get first day of month
+        let first_day = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+        let first_weekday = first_day.weekday();
+
+        // Calculate number of days in month
+        let days_in_month = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
+        }.signed_duration_since(first_day).num_days() as u32;
+
+        // Build calendar grid
+        let mut current_line_spans = Vec::new();
+
+        // Add leading spaces for first week
+        let leading_spaces = match first_weekday {
+            Weekday::Sun => 0,
+            Weekday::Mon => 1,
+            Weekday::Tue => 2,
+            Weekday::Wed => 3,
+            Weekday::Thu => 4,
+            Weekday::Fri => 5,
+            Weekday::Sat => 6,
+        };
+
+        for _ in 0..leading_spaces {
+            current_line_spans.push(Span::raw("   "));
+        }
+
+        // Add days
+        for day in 1..=days_in_month {
+            let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+            let is_today = date == today;
+            let has_review = self.review_dates.contains(&date);
+            let is_past = date < today;
+
+            // Determine color coding (no symbols, just colored day numbers)
+            let (text, style) = if is_today {
+                (format!("{:2}", day), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED))
+            } else if has_review {
+                (format!("{:2}", day), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            } else if is_past {
+                (format!("{:2}", day), Style::default().fg(Color::Red))
+            } else {
+                (format!("{:2}", day), Style::default().fg(Color::DarkGray))
+            };
+
+            current_line_spans.push(Span::styled(text, style));
+
+            // Add space or newline
+            let current_weekday = date.weekday();
+            if current_weekday == Weekday::Sat || day == days_in_month {
+                lines.push(Line::from(current_line_spans.clone()));
+                current_line_spans.clear();
+            } else {
+                current_line_spans.push(Span::raw(" "));
+            }
+        }
+
+        // Add legend
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Bold+Underline", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)),
+            Span::raw("=Today  "),
+            Span::styled("Bold", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("=Reviewed  "),
+            Span::styled("Red", Style::default().fg(Color::Red)),
+            Span::raw("=Missed"),
+        ]));
+
+        let block = Block::default()
+            .title("Review Calendar")
+            .borders(Borders::ALL)
+            .style(Style::default());
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
 
         f.render_widget(paragraph, area);
     }
