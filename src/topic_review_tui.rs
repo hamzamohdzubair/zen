@@ -75,6 +75,7 @@ pub struct TopicReviewApp {
     current_question: Option<CurrentQuestion>,
     current_input_lines: Vec<String>,
     current_line: String,
+    cursor_position: usize,  // Cursor position within current_line
     llm_evaluator: Box<dyn AnswerEvaluator>,
     llm_generator: Box<dyn QuestionGenerator>,
     status_message: String,
@@ -107,17 +108,10 @@ impl TopicReviewApp {
         let mut topic_progress = Vec::new();
         let mut seen_keyword_sets = std::collections::HashSet::new();
 
-        // DEBUG: Log all due topics to understand duplicates
-        eprintln!("DEBUG: Due topics count: {}", session.due_topics.len());
-        for (idx, topic) in session.due_topics.iter().enumerate() {
-            eprintln!("DEBUG: Topic[{}]: id={}, keywords={}", idx, topic.topic_id, topic.keywords.join(","));
-        }
-
         for (topic_index, topic) in session.due_topics.iter().enumerate() {
             // Deduplicate by keywords - skip if we've seen this keyword set already
             let keyword_key = topic.keywords.join(",");
             if seen_keyword_sets.contains(&keyword_key) {
-                eprintln!("DEBUG: Skipping duplicate topic with keywords: {}", keyword_key);
                 continue;
             }
             seen_keyword_sets.insert(keyword_key);
@@ -177,6 +171,7 @@ impl TopicReviewApp {
             current_question: None,
             current_input_lines: Vec::new(),
             current_line: String::new(),
+            cursor_position: 0,
             llm_evaluator: evaluator,
             llm_generator: generator,
             status_message: String::new(),
@@ -292,20 +287,45 @@ impl TopicReviewApp {
                     self.state = ReviewState::InputtingAnswer;
                     self.current_input_lines.clear();
                     self.current_line.clear();
+                    self.cursor_position = 0;
                 }
             }
             ReviewState::InputtingAnswer => {
                 match key {
                     KeyCode::Char(c) => {
-                        self.current_line.push(c);
+                        self.current_line.insert(self.cursor_position, c);
+                        self.cursor_position += 1;
                     }
                     KeyCode::Backspace => {
-                        if self.current_line.is_empty() && !self.current_input_lines.is_empty() {
+                        if self.cursor_position > 0 {
+                            self.current_line.remove(self.cursor_position - 1);
+                            self.cursor_position -= 1;
+                        } else if self.current_line.is_empty() && !self.current_input_lines.is_empty() {
                             // Move to previous line
                             self.current_line = self.current_input_lines.pop().unwrap();
-                        } else {
-                            self.current_line.pop();
+                            self.cursor_position = self.current_line.len();
                         }
+                    }
+                    KeyCode::Delete => {
+                        if self.cursor_position < self.current_line.len() {
+                            self.current_line.remove(self.cursor_position);
+                        }
+                    }
+                    KeyCode::Left => {
+                        if self.cursor_position > 0 {
+                            self.cursor_position -= 1;
+                        }
+                    }
+                    KeyCode::Right => {
+                        if self.cursor_position < self.current_line.len() {
+                            self.cursor_position += 1;
+                        }
+                    }
+                    KeyCode::Home => {
+                        self.cursor_position = 0;
+                    }
+                    KeyCode::End => {
+                        self.cursor_position = self.current_line.len();
                     }
                     KeyCode::Enter => {
                         // Check if this is second Enter (submit)
@@ -320,6 +340,7 @@ impl TopicReviewApp {
                             // New line
                             self.current_input_lines.push(self.current_line.clone());
                             self.current_line.clear();
+                            self.cursor_position = 0;
                         }
                     }
                     _ => {}
@@ -658,7 +679,10 @@ impl TopicReviewApp {
 
         let answer_text = if is_inputting {
             let mut lines = self.current_input_lines.clone();
-            lines.push(format!("{}█", self.current_line));
+            // Insert cursor at the correct position
+            let mut current_with_cursor = self.current_line.clone();
+            current_with_cursor.insert(self.cursor_position, '█');
+            lines.push(current_with_cursor);
             lines.join("\n")
         } else if let Some(question) = &self.current_question {
             question.answer.clone().unwrap_or_default()
@@ -938,13 +962,7 @@ impl TopicReviewApp {
 
                 if let Some(feedback) = &current_q.feedback {
                     lines.push(Line::from(Span::styled("Feedback:", Style::default().add_modifier(Modifier::BOLD))));
-                    // Limit feedback to avoid overflow
-                    let feedback_short = if feedback.len() > 150 {
-                        format!("{}...", &feedback[..147])
-                    } else {
-                        feedback.clone()
-                    };
-                    lines.push(Line::from(feedback_short));
+                    lines.push(Line::from(feedback.as_str()));
                 }
             } else {
                 lines.push(Line::from("Answer the question to see feedback"));
@@ -976,32 +994,26 @@ impl TopicReviewApp {
         // Topic report card with dots - formatted as table
         let mut report_lines = Vec::new();
 
-        report_lines.push(Line::from(Span::styled(
-            "Topics Progress:",
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        report_lines.push(Line::from(""));
-
         // Table header (aligned with data columns)
         report_lines.push(Line::from(vec![
-            Span::styled(format!("{:<40}", "Topic"), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:<50}", "Topic"), Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled("Status", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled("Avg", Style::default().add_modifier(Modifier::BOLD)),
         ]));
-        report_lines.push(Line::from("─".repeat(55)));
+        report_lines.push(Line::from("─".repeat(65)));
 
         // Show each topic with 3 dots (○ pending, ✓ correct, ✗ incorrect)
         for topic_prog in &self.topic_progress {
             let mut line_spans = Vec::new();
 
-            // Column 1: Keywords (truncate to 40 chars)
+            // Column 1: Keywords (truncate to 50 chars)
             let keywords_str = topic_prog.keywords.join(",");
-            let keywords_display = if keywords_str.len() > 40 {
-                format!("{:.37}...", keywords_str)
+            let keywords_display = if keywords_str.len() > 50 {
+                format!("{:.47}...", keywords_str)
             } else {
-                format!("{:<40}", keywords_str)
+                format!("{:<50}", keywords_str)
             };
             line_spans.push(Span::raw(keywords_display));
             line_spans.push(Span::raw("  "));
@@ -1049,11 +1061,11 @@ impl TopicReviewApp {
 
         if !all_scores.is_empty() {
             let session_avg = all_scores.iter().sum::<f64>() / all_scores.len() as f64;
-            report_lines.push(Line::from("─".repeat(55)));
+            report_lines.push(Line::from("─".repeat(65)));
 
             let mut summary_spans = Vec::new();
             summary_spans.push(Span::styled(
-                format!("{:<40}", "Session Total"),
+                format!("{:<50}", "Session Total"),
                 Style::default().add_modifier(Modifier::BOLD)
             ));
             summary_spans.push(Span::raw("  "));
