@@ -4,59 +4,39 @@ version = "1.1.1"
 edition = "2021"
 authors = ["Hamza Mohd Zubair <hamzamohdzubair@gmail.com>"]
 license = "MIT OR Apache-2.0"
-description = "A spaced repetition CLI for active recall using FSRS algorithm"
+description = "Thin CLI client for forgetmeifyoucan - AI-powered spaced repetition learning"
 repository = "https://github.com/hamzamohdzubair/zen"
-readme = "README.md"
-keywords = ["flashcards", "spaced-repetition", "fsrs", "cli", "learning"]
-categories = ["command-line-utilities"]
+keywords = ["spaced-repetition", "learning", "ai", "cli", "tui"]
+categories = ["command-line-utilities", "education"]
 
 [[bin]]
 name = "zen"
 path = "src/main.rs"
 
 [dependencies]
-# CLI framework
-clap = { version = "4", features = ["derive"] }
+# CLI & TUI
+clap = { version = "4.5", features = ["derive", "cargo"] }
+ratatui = "0.29"
+crossterm = "0.28"
 
-# Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
+# API Client
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Auth token storage
+keyring = "3.6"
+rpassword = "7.3"
 
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 
-# Random ID generation
-rand = "0.8"
-
-# FSRS algorithm (for future phases)
-fsrs = "5.2"
-
-# Error handling
-anyhow = "1.0"
-
-# Configuration
-toml = "0.8"
-
-# TUI framework
-ratatui = "0.29"
-crossterm = "0.28"
-
-# Fuzzy matching
-nucleo-matcher = "0.3"
-
-# Content hashing for edit detection
-sha2 = "0.10"
-
-# Table formatting
-tabled = "0.16"
-
-# BERT scoring
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["half", "download-binaries", "tls-rustls"] }
-tokenizers = "0.20"
-ndarray = "0.16"
-ureq = "2.10"
-dirs = "5.0"
-
-[dev-dependencies]
-tempfile = "3.15"
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

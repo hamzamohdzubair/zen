@@ -1,12 +1,119 @@
-//! Command implementations for the zen CLI
+use anyhow::{Context, Result};
+use std::io::{self, Write};
+use crate::{api_client::ApiClient, auth};
 
-use anyhow::Result;
-use chrono::Utc;
-use tabled::{Table, Tabled, settings::Style};
+/// Login to forgetmeifyoucan account
+pub fn login(email: Option<String>) -> Result<()> {
+    // Check if already logged in
+    if auth::is_logged_in() {
+        println!("✓ Already logged in!");
+        println!("Run 'zen logout' first if you want to switch accounts.");
+        return Ok(());
+    }
 
-/// Add a new topic with comma-separated keywords
-pub fn add_topic(keywords_str: &str) -> Result<()> {
-    // Parse comma-separated keywords
+    // Get email
+    let email = if let Some(email) = email {
+        email
+    } else {
+        print!("Email: ");
+        io::stdout().flush()?;
+        let mut email = String::new();
+        io::stdin().read_line(&mut email)?;
+        email.trim().to_string()
+    };
+
+    // Get password (hidden)
+    let password = rpassword::prompt_password("Password: ")
+        .context("Failed to read password")?;
+
+    // Create API client and login
+    let client = ApiClient::new(None)?;
+    println!("Logging in...");
+
+    let response = client.login(&email, &password)
+        .context("Login failed. Please check your credentials.")?;
+
+    // Store token
+    auth::store_token(&response.token)?;
+
+    println!("✓ Login successful!");
+    println!("Welcome back, {}!", response.user.email);
+    println!("Subscription: {} ({})", response.user.subscription_tier, response.user.subscription_status);
+
+    Ok(())
+}
+
+/// Logout from account
+pub fn logout() -> Result<()> {
+    if !auth::is_logged_in() {
+        println!("Not logged in.");
+        return Ok(());
+    }
+
+    auth::delete_token()?;
+    println!("✓ Logged out successfully.");
+
+    Ok(())
+}
+
+/// Show current user info
+pub fn show_me() -> Result<()> {
+    let token = auth::get_token()?;
+    let client = ApiClient::new(Some(token))?;
+
+    let user = client.get_me()?;
+
+    println!("\n📊 Account Information\n");
+    println!("Email: {}", user.email);
+    println!("User ID: {}", user.id);
+    println!("Subscription: {} ({})", user.subscription_tier, user.subscription_status);
+    println!();
+
+    Ok(())
+}
+
+/// List all topics
+pub fn list_topics(due_only: bool) -> Result<()> {
+    let token = auth::get_token()?;
+    let client = ApiClient::new(Some(token))?;
+
+    let topics = client.list_topics(due_only)?;
+
+    if topics.is_empty() {
+        if due_only {
+            println!("✓ No topics due for review!");
+        } else {
+            println!("No topics found. Add one with: zen add \"Rust, Programming, Web\"");
+        }
+        return Ok(());
+    }
+
+    println!("\n📚 {} Topic(s):\n", topics.len());
+    for topic in topics {
+        let due = if let Some(due_date) = topic.due_date {
+            if due_date < chrono::Utc::now() {
+                "⚠️  DUE NOW".to_string()
+            } else {
+                format!("Due: {}", due_date.format("%Y-%m-%d %H:%M"))
+            }
+        } else {
+            "New topic".to_string()
+        };
+
+        println!("  {} → {} [{}]", topic.id, topic.keywords.join(", "), due);
+    }
+    println!();
+
+    Ok(())
+}
+
+/// Add a new topic
+pub fn add_topic(keywords: Vec<String>) -> Result<()> {
+    let token = auth::get_token()?;
+    let client = ApiClient::new(Some(token))?;
+
+    // Join all args into comma-separated keywords
+    let keywords_str = keywords.join(" ");
     let keywords: Vec<String> = keywords_str
         .split(',')
         .map(|s| s.trim().to_string())
@@ -14,210 +121,123 @@ pub fn add_topic(keywords_str: &str) -> Result<()> {
         .collect();
 
     if keywords.is_empty() {
-        anyhow::bail!("No keywords provided");
+        anyhow::bail!("Please provide at least one keyword. Example: zen add \"Rust, Programming, Web\"");
     }
 
-    // Validate keywords
-    if keywords.iter().any(|k| k.len() > 100) {
-        anyhow::bail!("Keywords must be under 100 characters");
-    }
+    println!("Creating topic: {}...", keywords.join(", "));
+    let topic = client.create_topic(keywords)?;
 
-    if keywords.len() > 20 {
-        anyhow::bail!("Maximum 20 keywords per topic");
-    }
-
-    // Check for existing topic with same keywords
-    let conn = crate::database::init_database()?;
-    if let Some(existing_id) = crate::database::find_topic_by_keywords(&conn, &keywords)? {
-        println!("✗ Topic already exists with ID: {}", existing_id);
-        println!("  Keywords: {}", keywords.join(", "));
-        println!("\nTip: Use 'zen del {}' to remove it if needed", existing_id);
-        anyhow::bail!("Topic with these keywords already exists");
-    }
-
-    // Create topic
-    let topic_id = crate::topic::generate_unique_topic_id()?;
-    let now = Utc::now();
-
-    // Save to database
-    crate::database::insert_topic(&conn, &topic_id, &now.to_rfc3339(), &now.to_rfc3339())?;
-    crate::database::insert_topic_keywords(&conn, &topic_id, &keywords)?;
-
-    // Initialize schedule (due immediately)
-    let due_date = now;
-    crate::database::insert_initial_topic_schedule(&conn, &topic_id, &due_date)?;
-
-    println!("✓ Topic created: {}", topic_id);
-    println!("  Keywords: {}", keywords.join(", "));
-    println!("  Due for review now");
-
-    Ok(())
-}
-
-/// Start a topic review session
-pub fn start_topic_review() -> Result<()> {
-    // Check if there are any due topics
-    let conn = crate::database::init_database()?;
-    let due_topics = crate::database::get_due_topics(&conn)?;
-
-    if due_topics.is_empty() {
-        println!("No topics due for review!");
-        println!("\nTip: Use 'zen topics --due' to see when topics are due");
-        return Ok(());
-    }
-
-    // Launch TUI app
-    crate::topic_review_tui::TopicReviewApp::new()?;
-
-    Ok(())
-}
-
-/// Show topic statistics
-pub fn show_topic_stats() -> Result<()> {
-    let conn = crate::database::init_database()?;
-    let stats = crate::database::get_topic_stats(&conn)?;
-
-    println!("\n╔════════════════════════════╗");
-    println!("║   Topic Statistics         ║");
-    println!("╚════════════════════════════╝");
-    println!();
-    println!("  Total topics:       {}", stats.total);
-    println!("  Due today:          {}", stats.due_today);
-    println!("  Due this week:      {}", stats.due_week);
-    println!("  Reviews completed:  {}", stats.reviews_completed);
-
-    if stats.reviews_completed > 0 {
-        println!("  Average score:      {:.1}%", stats.average_score);
-    }
-    println!();
-
-    Ok(())
-}
-
-/// Table row for displaying topic information
-#[derive(Tabled)]
-struct TopicTableRow {
-    #[tabled(rename = "ID")]
-    id: String,
-    #[tabled(rename = "Keywords")]
-    keywords: String,
-    #[tabled(rename = "Status")]
-    status: String,
-    #[tabled(rename = "Created")]
-    created: String,
-}
-
-/// List all topics or only due topics
-pub fn list_topics(due_only: bool) -> Result<()> {
-    let conn = crate::database::init_database()?;
-    let topics = if due_only {
-        crate::database::get_due_topics_with_info(&conn)?
-    } else {
-        crate::database::get_all_topics(&conn)?
-    };
-
-    if topics.is_empty() {
-        if due_only {
-            println!("No topics are due for review");
-        } else {
-            println!("No topics yet. Create one with: zen add \"keyword1, keyword2\"");
-        }
-        return Ok(());
-    }
-
-    let title = if due_only { "Due Topics" } else { "All Topics" };
-
-    // Build table rows
-    let now = Utc::now();
-    let mut rows = Vec::new();
-
-    for topic in topics {
-        let keywords_display = topic.keywords.join(", ");
-        let keywords_display = if keywords_display.len() > 80 {
-            format!("{}...", &keywords_display[..77])
-        } else {
-            keywords_display
-        };
-
-        // Format due date with color indicators
-        let status = if topic.due_date <= now {
-            "🔴 Due now".to_string()
-        } else {
-            let days = (topic.due_date - now).num_days();
-            if days == 0 {
-                "🔴 Due today".to_string()
-            } else if days == 1 {
-                "🟡 Due tomorrow".to_string()
-            } else if days <= 3 {
-                format!("🟡 Due in {} days", days)
-            } else if days <= 7 {
-                format!("🟢 Due in {} days", days)
-            } else {
-                format!("⚪ Due in {} days", days)
-            }
-        };
-
-        // Format created date
-        let created = topic.created_at.format("%Y-%m-%d").to_string();
-
-        rows.push(TopicTableRow {
-            id: topic.id,
-            keywords: keywords_display,
-            status,
-            created,
-        });
-    }
-
-    // Create and display table
-    let total_count = rows.len();
-
-    println!("\n╔══════════════════════════════════════════════════════════╗");
-    println!("║  {}{}║", title, " ".repeat(56 - title.len()));
-    println!("╚══════════════════════════════════════════════════════════╝\n");
-
-    let mut table = Table::new(rows);
-    table.with(Style::modern());
-
-    println!("{}", table);
-    println!("\n📊 Total: {} topic(s)\n", total_count);
+    println!("✓ Topic created!");
+    println!("ID: {}", topic.id);
+    println!("Start reviewing with: zen start");
 
     Ok(())
 }
 
 /// Delete a topic
 pub fn delete_topic(topic_id: &str) -> Result<()> {
-    let conn = crate::database::init_database()?;
+    let token = auth::get_token()?;
+    let client = ApiClient::new(Some(token))?;
 
-    // Check if topic exists
-    if !crate::database::topic_exists_in_db(&conn, topic_id)? {
-        anyhow::bail!("Topic '{}' not found", topic_id);
-    }
-
-    // Get keywords for confirmation
-    let keywords = crate::database::get_topic_keywords(&conn, topic_id)?;
-
-    // Confirm deletion
-    println!("Delete topic '{}'?", topic_id);
-    println!("Keywords: {}", keywords.join(", "));
-    print!("\nType 'yes' to confirm: ");
-
-    use std::io::{self, Write};
+    print!("Are you sure you want to delete topic '{}'? [y/N] ", topic_id);
     io::stdout().flush()?;
 
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
 
-    if input.trim().eq_ignore_ascii_case("yes") {
-        crate::database::delete_topic(&conn, topic_id)?;
-        println!("✓ Topic deleted");
-    } else {
-        println!("Deletion cancelled");
+    if input.trim().to_lowercase() != "y" {
+        println!("Cancelled.");
+        return Ok(());
     }
+
+    client.delete_topic(topic_id)?;
+    println!("✓ Topic deleted.");
 
     Ok(())
 }
 
-/// Show stats TUI with topic and keyword performance
-pub fn show_stats_tui() -> Result<()> {
-    crate::stats_tui::StatsApp::new()
+/// Show statistics
+pub fn show_stats() -> Result<()> {
+    let token = auth::get_token()?;
+    let client = ApiClient::new(Some(token))?;
+
+    let stats = client.get_stats_summary()?;
+
+    println!("\n📊 Your Statistics\n");
+    println!("Total Topics: {}", stats.total_topics);
+    println!("Due Today: {}", stats.due_today);
+    println!("Total Reviews: {}", stats.total_reviews);
+    println!("Average Score: {:.1}%", stats.average_score);
+    println!("Current Streak: {} days", stats.current_streak);
+    println!();
+
+    Ok(())
+}
+
+/// Start a review session (TUI)
+pub fn start_review() -> Result<()> {
+    let token = auth::get_token()?;
+    let client = ApiClient::new(Some(token))?;
+
+    // Get due topics
+    let topics = client.get_due_topics()?;
+
+    if topics.is_empty() {
+        println!("✓ No topics due for review!");
+        println!("Check back later or add more topics with: zen add \"Topic, Keywords\"");
+        return Ok(());
+    }
+
+    println!("\n📚 {} topic(s) due for review\n", topics.len());
+    println!("Starting review session...\n");
+
+    // For now, simple CLI-based review (we'll add TUI later)
+    for topic in topics {
+        println!("\n{'=':<60}\n", "");
+        println!("Topic: {}\n", topic.keywords.join(", "));
+
+        let mut total_score = 0;
+
+        // Ask 3 questions
+        for q_num in 1..=3 {
+            println!("\nQuestion {}/3:", q_num);
+
+            // Generate question
+            let question_response = client.generate_question(&topic.id, q_num)?;
+            println!("{}\n", question_response.question);
+
+            // Get user answer
+            print!("Your answer: ");
+            io::stdout().flush()?;
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            let answer = answer.trim();
+
+            if answer.is_empty() {
+                println!("Skipped.");
+                continue;
+            }
+
+            // Evaluate answer
+            println!("Evaluating...");
+            let eval = client.evaluate_answer(&topic.id, &question_response.question, answer)?;
+
+            println!("\nScore: {}/100", eval.score);
+            println!("Feedback: {}", eval.feedback);
+            println!("Ideal answer: {}", eval.ideal_answer);
+
+            total_score += eval.score;
+        }
+
+        // Complete review
+        let avg_score = total_score / 3;
+        client.complete_review(&topic.id, avg_score)?;
+
+        println!("\n✓ Review completed! Average score: {}/100", avg_score);
+    }
+
+    println!("\n{'=':<60}\n", "");
+    println!("✓ All reviews completed! Great job! 🎉\n");
+
+    Ok(())
 }
