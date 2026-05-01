@@ -430,6 +430,26 @@ impl App {
 
     // ── Parent/child ─────────────────────────────────────────────────────────
 
+    fn task_depth(&self, id: Uuid) -> usize {
+        let mut depth = 0;
+        let mut current = id;
+        while let Some(pid) = self.task_ref(current).and_then(|t| t.parent_id) {
+            depth += 1;
+            current = pid;
+        }
+        depth
+    }
+
+    fn ancestor_at_depth(&self, id: Uuid, target_depth: usize) -> Option<Uuid> {
+        let mut current = id;
+        let mut depth = self.task_depth(id);
+        while depth > target_depth {
+            current = self.task_ref(current).and_then(|t| t.parent_id)?;
+            depth -= 1;
+        }
+        (depth == target_depth).then_some(current)
+    }
+
     pub fn make_child(&mut self) {
         let col = self.focused_col;
         let visible: Vec<Uuid> = self.visible_tasks_for(col).iter().map(|t| t.id).collect();
@@ -438,13 +458,46 @@ impl App {
             return;
         }
         let child_id = visible[cur];
-        let parent_id = visible[cur - 1];
-        if let Some(child) = self.task_mut(child_id) {
-            child.parent_id = Some(parent_id);
+        let above_id = visible[cur - 1];
+
+        let child_depth = self.task_depth(child_id);
+        let above_depth = self.task_depth(above_id);
+
+        // Increase depth by exactly one level: find the ancestor of the task above
+        // at the current task's depth. This prevents skipping indentation levels.
+        if above_depth < child_depth {
+            return;
         }
-        if let Some(parent) = self.task_mut(parent_id) {
-            if !parent.children.contains(&child_id) {
-                parent.children.push(child_id);
+        let Some(new_parent_id) = self.ancestor_at_depth(above_id, child_depth) else {
+            return;
+        };
+
+        let old_parent_id = self.task_ref(child_id).and_then(|t| t.parent_id);
+        if old_parent_id != Some(new_parent_id) {
+            if let Some(old_pid) = old_parent_id {
+                if let Some(old_parent) = self.task_mut(old_pid) {
+                    old_parent.children.retain(|&c| c != child_id);
+                }
+            }
+            if let Some(child) = self.task_mut(child_id) {
+                child.parent_id = Some(new_parent_id);
+            }
+            if let Some(parent) = self.task_mut(new_parent_id) {
+                if !parent.children.contains(&child_id) {
+                    parent.children.push(child_id);
+                }
+            }
+
+            // Project reconciliation: the whole family must share one project.
+            let parent_project = self.task_ref(new_parent_id).map(|t| t.project.clone()).unwrap_or_default();
+            let child_project = self.task_ref(child_id).map(|t| t.project.clone()).unwrap_or_default();
+            if !parent_project.is_empty() {
+                // Parent (or parent's family) has a project — child's subtree inherits it.
+                self.set_project_recursive(child_id, parent_project);
+            } else if !child_project.is_empty() {
+                // Parent is unc — the whole parent family adopts the child's project.
+                let root_id = self.root_task_id(new_parent_id);
+                self.set_project_recursive(root_id, child_project);
             }
         }
         self.status_message = Some("Made child of task above".into());
@@ -453,16 +506,27 @@ impl App {
     pub fn make_root(&mut self) {
         let col = self.focused_col;
         if let Some(id) = self.selected_task_id(col) {
-            let old_parent = self.task_ref(id).and_then(|t| t.parent_id);
-            if let Some(task) = self.task_mut(id) {
-                task.parent_id = None;
+            let old_parent_id = match self.task_ref(id).and_then(|t| t.parent_id) {
+                Some(pid) => pid,
+                None => return, // already root
+            };
+            let grandparent_id = self.task_ref(old_parent_id).and_then(|t| t.parent_id);
+
+            if let Some(old_parent) = self.task_mut(old_parent_id) {
+                old_parent.children.retain(|&c| c != id);
             }
-            if let Some(parent_id) = old_parent {
-                if let Some(parent) = self.task_mut(parent_id) {
-                    parent.children.retain(|&c| c != id);
+            if let Some(task) = self.task_mut(id) {
+                task.parent_id = grandparent_id;
+            }
+            if let Some(gpid) = grandparent_id {
+                if let Some(gp) = self.task_mut(gpid) {
+                    if !gp.children.contains(&id) {
+                        gp.children.push(id);
+                    }
                 }
             }
-            self.status_message = Some("Promoted to root task".into());
+            let msg = if grandparent_id.is_some() { "Promoted one level up" } else { "Promoted to root task" };
+            self.status_message = Some(msg.into());
         }
     }
 
@@ -813,6 +877,18 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    pub fn undone_leaf_count(&self, id: Uuid) -> usize {
+        let task = match self.task_ref(id) {
+            Some(t) => t,
+            None => return 0,
+        };
+        if task.children.is_empty() {
+            (task.status != Status::Done) as usize
+        } else {
+            task.children.clone().iter().map(|&cid| self.undone_leaf_count(cid)).sum()
+        }
+    }
+
     fn root_task_id(&self, id: Uuid) -> Uuid {
         let mut current = id;
         while let Some(parent_id) = self.task_ref(current).and_then(|t| t.parent_id) {
@@ -1106,6 +1182,31 @@ mod tests {
     // ── make_child / make_root ────────────────────────────────────────────────
 
     #[test]
+    fn make_child_increments_depth_by_one_when_above_is_deeper() {
+        // Structure: root1 → child_of_root1, then root2 at cursor.
+        // Pressing `>` on root2 should make it a sibling of child_of_root1
+        // (child of root1), NOT a grandchild (child of child_of_root1).
+        let root1 = task("root1", "", Status::Todo);
+        let mut child_of_root1 = task("child_of_root1", "", Status::Todo);
+        let root2 = task("root2", "", Status::Todo);
+        let root1_id = root1.id;
+        let child_id = child_of_root1.id;
+        let root2_id = root2.id;
+        child_of_root1.parent_id = Some(root1_id);
+        let mut app = App::new(vec![root1, child_of_root1, root2], no_projects());
+        // Manually wire root1.children so visible_tasks_for orders correctly
+        app.task_mut(root1_id).unwrap().children.push(child_id);
+        app.focused_col = Column::Todo;
+        // visible order: root1 (0), child_of_root1 (1), root2 (2)
+        app.cursor[0] = 2;
+        app.make_child();
+        // root2 should now be a child of root1 (depth 1), not child_of_root1 (depth 2)
+        assert_eq!(app.task_ref(root2_id).unwrap().parent_id, Some(root1_id));
+        assert!(app.task_ref(root1_id).unwrap().children.contains(&root2_id));
+        assert!(!app.task_ref(child_id).unwrap().children.contains(&root2_id));
+    }
+
+    #[test]
     fn make_child_links_parent_and_child() {
         let parent = task("parent", "", Status::Todo);
         let child = task("child", "", Status::Todo);
@@ -1120,7 +1221,7 @@ mod tests {
     }
 
     #[test]
-    fn make_root_removes_parent_link() {
+    fn make_root_promotes_depth1_to_root() {
         let mut parent = task("parent", "", Status::Todo);
         let mut child = task("child", "", Status::Todo);
         let parent_id = parent.id;
@@ -1129,11 +1230,76 @@ mod tests {
         parent.children.push(child_id);
         let mut app = App::new(vec![parent, child], no_projects());
         app.focused_col = Column::Todo;
-        // child appears second in visible list
         app.cursor[0] = 1;
         app.make_root();
         assert!(app.task_ref(child_id).unwrap().parent_id.is_none());
         assert!(!app.task_ref(parent_id).unwrap().children.contains(&child_id));
+    }
+
+    #[test]
+    fn make_root_decrements_depth_by_one_not_to_root() {
+        // grandparent → parent → child (depth 2)
+        // pressing `<` on child should make it depth 1 (child of grandparent), not root
+        let mut grandparent = task("grandparent", "", Status::Todo);
+        let mut parent = task("parent", "", Status::Todo);
+        let mut child = task("child", "", Status::Todo);
+        let gp_id = grandparent.id;
+        let parent_id = parent.id;
+        let child_id = child.id;
+        parent.parent_id = Some(gp_id);
+        grandparent.children.push(parent_id);
+        child.parent_id = Some(parent_id);
+        parent.children.push(child_id);
+        let mut app = App::new(vec![grandparent, parent, child], no_projects());
+        app.focused_col = Column::Todo;
+        // visible order: grandparent(0), parent(1), child(2)
+        app.cursor[0] = 2;
+        app.make_root();
+        assert_eq!(app.task_ref(child_id).unwrap().parent_id, Some(gp_id));
+        assert!(app.task_ref(gp_id).unwrap().children.contains(&child_id));
+        assert!(!app.task_ref(parent_id).unwrap().children.contains(&child_id));
+    }
+
+    // ── make_child project inheritance ───────────────────────────────────────
+
+    #[test]
+    fn make_child_unc_inherits_parent_project() {
+        let parent = task("parent", "work", Status::Todo);
+        let child = task("child", "", Status::Todo);
+        let child_id = child.id;
+        let mut app = App::new(vec![parent, child], no_projects());
+        app.focused_col = Column::Todo;
+        app.cursor[0] = 1;
+        app.make_child();
+        assert_eq!(app.task_ref(child_id).unwrap().project, "work");
+    }
+
+    #[test]
+    fn make_child_unc_parent_inherits_child_project() {
+        let parent = task("parent", "", Status::Todo);
+        let child = task("child", "work", Status::Todo);
+        let parent_id = parent.id;
+        let child_id = child.id;
+        let mut app = App::new(vec![parent, child], no_projects());
+        app.focused_col = Column::Todo;
+        app.cursor[0] = 1;
+        app.make_child();
+        assert_eq!(app.task_ref(parent_id).unwrap().project, "work");
+        assert_eq!(app.task_ref(child_id).unwrap().project, "work");
+    }
+
+    #[test]
+    fn make_child_parent_project_takes_precedence_over_child() {
+        let parent = task("parent", "work", Status::Todo);
+        let child = task("child", "personal", Status::Todo);
+        let parent_id = parent.id;
+        let child_id = child.id;
+        let mut app = App::new(vec![parent, child], no_projects());
+        app.focused_col = Column::Todo;
+        app.cursor[0] = 1;
+        app.make_child();
+        assert_eq!(app.task_ref(parent_id).unwrap().project, "work");
+        assert_eq!(app.task_ref(child_id).unwrap().project, "work");
     }
 
     // ── confirm_delete ─────────────────────────────────────────────────────────
@@ -1245,6 +1411,36 @@ mod tests {
         assert!(!app.has_unc_tasks());
         app.tasks.push(task("x", "", Status::Todo));
         assert!(app.has_unc_tasks());
+    }
+
+    #[test]
+    fn undone_leaf_count_sums_non_done_leaves() {
+        let mut root = task("root", "", Status::Todo);
+        let mut child_a = task("child_a", "", Status::Todo);
+        let mut child_b = task("child_b", "", Status::Doing);
+        let mut child_c = task("child_c", "", Status::Done);
+        let root_id = root.id;
+        let a_id = child_a.id;
+        let b_id = child_b.id;
+        let c_id = child_c.id;
+        child_a.parent_id = Some(root_id);
+        child_b.parent_id = Some(root_id);
+        child_c.parent_id = Some(root_id);
+        root.children.extend([a_id, b_id, c_id]);
+        let app = App::new(vec![root, child_a, child_b, child_c], no_projects());
+        // child_a (todo) + child_b (doing) = 2 undone leaves; child_c (done) excluded
+        assert_eq!(app.undone_leaf_count(root_id), 2);
+    }
+
+    #[test]
+    fn undone_leaf_count_is_none_for_leaf_task() {
+        let leaf = task("leaf", "", Status::Todo);
+        let leaf_id = leaf.id;
+        let app = App::new(vec![leaf], no_projects());
+        // Leaf tasks return 1 from the recursive helper (they count themselves),
+        // but draw_card only calls undone_leaf_count when children is non-empty.
+        // The value when called on a plain leaf is 1 (itself, undone).
+        assert_eq!(app.undone_leaf_count(leaf_id), 1);
     }
 
     #[test]

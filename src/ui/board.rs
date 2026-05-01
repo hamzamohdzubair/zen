@@ -189,7 +189,12 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                     None
                 };
 
-                draw_card(frame, task, selected, number, depth, is_moving, inline_edit,
+                let leaf_count = if task.children.is_empty() {
+                    None
+                } else {
+                    Some(app.undone_leaf_count(task.id))
+                };
+                draw_card(frame, task, selected, number, depth, is_moving, inline_edit, leaf_count,
                           Rect { x: inner.x, y, width: inner.width, height: 1 });
                 y += 1;
             }
@@ -217,6 +222,7 @@ fn draw_card(
     depth: usize,
     is_moving: bool,
     inline_edit: Option<&str>,
+    leaf_count: Option<usize>,
     area: Rect,
 ) {
     if area.height == 0 || area.width == 0 {
@@ -256,6 +262,11 @@ fn draw_card(
         task.title.clone()
     };
     spans.push(Span::styled(title_text, Style::default().fg(fg).bg(bg).add_modifier(bold)));
+
+    if let Some(n) = leaf_count {
+        let count_str = format!(" ({})", n);
+        spans.push(Span::styled(count_str, Style::default().fg(num_fg).bg(bg)));
+    }
 
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
