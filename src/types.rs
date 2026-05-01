@@ -64,7 +64,6 @@ impl Task {
         self.status = new_status;
     }
 
-    /// Duration in seconds spent in the given status across all transitions.
     pub fn time_in(&self, status: &Status) -> i64 {
         let mut total = 0i64;
         let init_status = if self.transitions.is_empty() {
@@ -99,41 +98,4 @@ impl Task {
 
         total
     }
-}
-
-/// All projects are inferred from task project fields.
-/// Returns deduplicated sorted list.
-pub fn collect_projects(tasks: &[Task]) -> Vec<String> {
-    tasks
-        .iter()
-        .map(|t| t.project.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-/// Check if a task's project matches a filter prefix.
-pub fn project_matches(task_project: &str, filter: &str) -> bool {
-    if filter.is_empty() {
-        return true;
-    }
-    task_project == filter || task_project.starts_with(&format!("{}/", filter))
-}
-
-/// Returns byte positions in `project` where `query` starts at a segment boundary
-/// (position 0 or immediately after a '/').
-pub fn segment_boundary_matches(project: &str, query: &str) -> Vec<usize> {
-    if query.is_empty() || project.len() < query.len() {
-        return vec![];
-    }
-    let qlen = query.len();
-    let bytes = project.as_bytes();
-    let mut positions = vec![];
-    for i in 0..=(project.len() - qlen) {
-        let at_boundary = i == 0 || bytes[i - 1] == b'/';
-        if at_boundary && project[i..i + qlen].eq_ignore_ascii_case(query) {
-            positions.push(i);
-        }
-    }
-    positions
 }

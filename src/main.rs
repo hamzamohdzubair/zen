@@ -48,8 +48,8 @@ fn run_tui() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let tasks = storage::load();
-    let mut app = App::new(tasks);
+    let (tasks, projects) = storage::load();
+    let mut app = App::new(tasks, projects);
 
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
@@ -60,7 +60,7 @@ fn run_tui() -> io::Result<()> {
                 app.status_message = None;
                 match handle_key(&mut app, key) {
                     AppAction::Quit => break,
-                    AppAction::Save => storage::save(&app.tasks),
+                    AppAction::Save => storage::save(&app.tasks, &app.projects),
                     AppAction::None => {}
                 }
             }
@@ -78,7 +78,7 @@ fn run_tui() -> io::Result<()> {
 }
 
 fn run_export() -> io::Result<()> {
-    let tasks = storage::load();
+    let (tasks, _) = storage::load();
     println!("id,title,project,status,created_at,time_in_todo_s,time_in_doing_s,time_in_done_s");
     for task in &tasks {
         use types::Status;

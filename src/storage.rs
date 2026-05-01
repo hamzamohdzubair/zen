@@ -1,7 +1,16 @@
 use std::fs;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::types::Task;
+
+#[derive(Serialize, Deserialize, Default)]
+struct AppState {
+    tasks: Vec<Task>,
+    #[serde(default)]
+    projects: Vec<Option<String>>,
+}
 
 fn data_path() -> PathBuf {
     let base = dirs_next::data_dir()
@@ -11,17 +20,32 @@ fn data_path() -> PathBuf {
     base.join("tasks.json")
 }
 
-pub fn load() -> Vec<Task> {
+pub fn load() -> (Vec<Task>, [Option<String>; 10]) {
     let path = data_path();
     if !path.exists() {
-        return Vec::new();
+        return (Vec::new(), Default::default());
     }
     let raw = fs::read_to_string(&path).unwrap_or_default();
-    serde_json::from_str(&raw).unwrap_or_default()
+
+    if let Ok(state) = serde_json::from_str::<AppState>(&raw) {
+        let mut projects: [Option<String>; 10] = Default::default();
+        for (i, p) in state.projects.into_iter().enumerate().take(10) {
+            projects[i] = p;
+        }
+        return (state.tasks, projects);
+    }
+
+    // Legacy: plain task array
+    let tasks = serde_json::from_str::<Vec<Task>>(&raw).unwrap_or_default();
+    (tasks, Default::default())
 }
 
-pub fn save(tasks: &[Task]) {
+pub fn save(tasks: &[Task], projects: &[Option<String>; 10]) {
     let path = data_path();
-    let raw = serde_json::to_string_pretty(tasks).unwrap_or_default();
+    let state = AppState {
+        tasks: tasks.to_vec(),
+        projects: projects.to_vec(),
+    };
+    let raw = serde_json::to_string_pretty(&state).unwrap_or_default();
     fs::write(path, raw).ok();
 }
