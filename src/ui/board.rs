@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::{App, Column, InsertPosition, InsertState, Mode};
 use crate::types::{Status, Task};
@@ -43,6 +43,15 @@ fn compute_ghost_chain(task_id: Uuid, col_ids: &HashSet<Uuid>, app: &App) -> Vec
     }
     chain.reverse();
     chain
+}
+
+fn wrap_height(prefix_chars: usize, content_chars: usize, width: u16) -> u16 {
+    if width == 0 { return 1; }
+    let w = width as usize;
+    let total = prefix_chars + content_chars;
+    if total <= w { return 1; }
+    let overflow = total - w;
+    (1 + (overflow + w - 1) / w) as u16
 }
 
 fn is_descendant_of(task_id: Uuid, ancestor_id: Uuid, app: &App) -> bool {
@@ -200,8 +209,12 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                         if y >= inner.y + inner.height { break; }
                         if let Some(ancestor) = app.task_ref(gid) {
                             let ghost_num = ghost_numbers.get(&gid).copied().unwrap_or(0);
-                            draw_ghost_card(frame, ancestor, ghost_num, ci, Rect { x: inner.x, y, width: inner.width, height: 1 });
-                            y += 1;
+                            let prefix = ci * 2 + format!("{} ", ghost_num).len();
+                            let content = ancestor.title.chars().count();
+                            let h = wrap_height(prefix, content, inner.width)
+                                .min(inner.y + inner.height - y);
+                            draw_ghost_card(frame, ancestor, ghost_num, ci, Rect { x: inner.x, y, width: inner.width, height: h });
+                            y += h;
                         }
                     }
                     last_ghost_chain = chain.clone();
@@ -228,9 +241,19 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                 } else {
                     Some(app.undone_leaf_count(task.id))
                 };
+
+                let h = if inline_edit.is_some() {
+                    1
+                } else {
+                    let prefix = if depth > 0 { depth * 2 } else { 0 } + format!("{} ", number).len();
+                    let content = task.title.chars().count()
+                        + leaf_count.map_or(0, |n| format!(" ({})", n).chars().count());
+                    wrap_height(prefix, content, inner.width)
+                }.min(inner.y + inner.height - y);
+
                 draw_card(frame, task, selected, number, depth, is_moving, inline_edit, leaf_count,
-                          Rect { x: inner.x, y, width: inner.width, height: 1 });
-                y += 1;
+                          Rect { x: inner.x, y, width: inner.width, height: h });
+                y += h;
             }
 
             DrawItem::Inline => {
@@ -305,7 +328,7 @@ fn draw_card(
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)).wrap(Wrap { trim: false }),
         area,
     );
 }
@@ -324,7 +347,7 @@ fn draw_ghost_card(frame: &mut Frame, task: &Task, number: usize, depth: usize, 
     spans.push(Span::styled(format!("{} ", number), Style::default().fg(fg).bg(bg)));
     spans.push(Span::styled(task.title.as_str(), Style::default().fg(fg).bg(bg).add_modifier(Modifier::DIM)));
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)).wrap(Wrap { trim: false }),
         area,
     );
 }
