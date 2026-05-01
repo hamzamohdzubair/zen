@@ -302,6 +302,9 @@ fn draw_inline_card(frame: &mut Frame, state: &InsertState, depth: usize, area: 
 }
 
 pub fn project_to_color(project: &str) -> Color {
+    if project.is_empty() {
+        return Color::Indexed(102);
+    }
     // 15 pastel-range 256-color indices — muted, clearly distinct hues, dark text readable on all
     // Each maps to a unique hue region; no two entries share the same hue family
     let palette: [u8; 15] = [

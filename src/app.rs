@@ -517,7 +517,12 @@ impl App {
         let current_id = self.selected_task_id(col);
         let (parent_id, project, position) = if let Some(id) = current_id {
             let task = self.task_ref(id).unwrap();
-            (task.parent_id, task.project.clone(), InsertPosition::AfterSibling(id))
+            let project = if task.parent_id.is_some() {
+                task.project.clone()
+            } else {
+                self.default_project_for_insert()
+            };
+            (task.parent_id, project, InsertPosition::AfterSibling(id))
         } else {
             let project = self.default_project_for_insert();
             (None, project, InsertPosition::AtBeginning)
@@ -532,6 +537,29 @@ impl App {
         self.mode = Mode::Insert;
     }
 
+    pub fn begin_insert_todo_end(&mut self) {
+        let todo_roots: Vec<Uuid> = self.visible_tasks_for(Column::Todo)
+            .iter()
+            .filter(|t| t.parent_id.is_none())
+            .map(|t| t.id)
+            .collect();
+        let position = if let Some(&last_id) = todo_roots.last() {
+            InsertPosition::AfterSibling(last_id)
+        } else {
+            InsertPosition::AtBeginning
+        };
+        let project = self.default_project_for_insert();
+        self.focused_col = Column::Todo;
+        self.insert = Some(InsertState {
+            title: String::new(),
+            project,
+            parent_id: None,
+            status: Status::Todo,
+            position,
+        });
+        self.mode = Mode::Insert;
+    }
+
     pub fn begin_insert_before(&mut self) {
         let col = self.focused_col;
         let current_id = match self.selected_task_id(col) {
@@ -540,7 +568,11 @@ impl App {
         };
         let task = self.task_ref(current_id).unwrap();
         let parent_id = task.parent_id;
-        let project = task.project.clone();
+        let project = if parent_id.is_some() {
+            task.project.clone()
+        } else {
+            self.default_project_for_insert()
+        };
 
         let position = if let Some(pid) = parent_id {
             let children = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();

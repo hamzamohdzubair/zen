@@ -17,24 +17,33 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Cards",
         &[
-            ("o", "insert card below"),
-            ("O", "insert card above"),
-            ("i", "edit selected card"),
+            ("o", "new card below (to-do if in doing/done)"),
+            ("O", "new card above (to-do only)"),
+            ("i", "edit selected card title"),
             ("d", "delete selected card"),
-            ("H / L", "move card left / right"),
+            ("H / L", "move card left / right column"),
             ("K / J", "reorder card up / down"),
             ("> / <", "indent / promote card"),
-            ("m", "assign card to project"),
+            ("m, then 1-9", "assign card to project slot"),
+        ],
+    ),
+    (
+        "Insert Mode",
+        &[
+            ("Enter", "confirm and create card"),
+            ("Esc", "cancel"),
+            ("Tab", "indent  →  make child of card above"),
+            ("Shift-Tab", "unindent  →  promote to parent level"),
         ],
     ),
     (
         "Projects",
         &[
-            ("1-9 / 0", "toggle project filter"),
-            ("=", "enable all projects"),
-            ("-", "disable all projects"),
-            ("`", "toggle unclassified"),
-            ("P", "edit project slot names"),
+            ("P", "enter project edit  (← → pick slot, Enter save)"),
+            ("1-9 / 0", "toggle project filter on / off"),
+            ("=", "enable all project filters"),
+            ("-", "disable all project filters"),
+            ("`", "toggle unclassified tasks"),
         ],
     ),
     (
@@ -47,7 +56,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
 ];
 
 pub fn draw_help(frame: &mut Frame) {
-    let area = centered_rect(62, 80, frame.area());
+    let area = centered_rect(66, 85, frame.area());
 
     frame.render_widget(Clear, area);
 
@@ -67,20 +76,20 @@ pub fn draw_help(frame: &mut Frame) {
         lines.push(Line::from(Span::styled(
             format!("  {}  ", section),
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Blue)
+                .fg(Color::Indexed(189))
+                .bg(Color::Indexed(238))
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         for (key, desc) in *bindings {
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {:>12}  ", key),
+                    format!("  {:>14}  ", key),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(*desc, Style::default().fg(Color::Gray)),
+                Span::styled(*desc, Style::default().fg(Color::Indexed(252))),
             ]));
         }
         lines.push(Line::from(""));
