@@ -1,16 +1,18 @@
 use std::collections::HashSet;
+use std::time::Instant;
 use uuid::Uuid;
 
-use crate::types::{Status, Task, collect_projects, project_matches, segment_boundary_matches};
+use crate::types::{Status, Task};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
     Normal,
     Insert,
     Edit,
-    Filter,
     Move,
+    ProjectEdit,
     Confirm(ConfirmAction),
+    Help,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,43 +74,50 @@ pub struct EditState {
     pub description: String,
 }
 
-pub struct FilterState {
-    pub input: String,
-}
-
 pub struct MoveState {
     pub task_id: Uuid,
-    pub target_input: String,
-    pub suggestion_cursor: Option<usize>,
-    pub suggestion_query: Option<String>,
+}
+
+pub struct ProjectEditState {
+    pub slot: usize,
+    pub input: String,
 }
 
 pub struct App {
     pub tasks: Vec<Task>,
+    /// 10 named project slots. Index 0 = key '1', ..., index 8 = key '9', index 9 = key '0'.
+    pub projects: [Option<String>; 10],
+    pub active_slots: [bool; 10],
+    pub show_unc: bool,
     pub mode: Mode,
     pub focused_col: Column,
     pub cursor: [usize; 3],
-    pub active_projects: Vec<String>,
     pub insert: Option<InsertState>,
     pub edit: Option<EditState>,
-    pub filter: Option<FilterState>,
     pub move_state: Option<MoveState>,
+    pub project_edit: Option<ProjectEditState>,
     pub status_message: Option<String>,
+    pub last_digit_press: Option<(usize, Instant)>,
+    pub last_unc_press: Option<Instant>,
 }
 
 impl App {
-    pub fn new(tasks: Vec<Task>) -> Self {
+    pub fn new(tasks: Vec<Task>, projects: [Option<String>; 10]) -> Self {
         Self {
             tasks,
+            projects,
+            active_slots: [true; 10],
+            show_unc: true,
             mode: Mode::Normal,
             focused_col: Column::Todo,
             cursor: [0, 0, 0],
-            active_projects: Vec::new(),
             insert: None,
             edit: None,
-            filter: None,
             move_state: None,
+            project_edit: None,
             status_message: None,
+            last_digit_press: None,
+            last_unc_press: None,
         }
     }
 
@@ -120,14 +129,57 @@ impl App {
         }
     }
 
+    pub fn slot_for_project(&self, project: &str) -> Option<usize> {
+        if project.is_empty() {
+            return None;
+        }
+        self.projects.iter().position(|p| p.as_deref() == Some(project))
+    }
+
+    pub fn is_unc(&self, task: &Task) -> bool {
+        task.project.is_empty() || self.slot_for_project(&task.project).is_none()
+    }
+
+    pub fn task_visible(&self, task: &Task) -> bool {
+        if self.is_unc(task) {
+            self.show_unc
+        } else {
+            self.active_slots[self.slot_for_project(&task.project).unwrap()]
+        }
+    }
+
+    /// A leaf task is Todo/Doing with no direct children that are also Todo/Doing.
+    pub fn is_leaf_task(&self, task: &Task) -> bool {
+        if !matches!(task.status, Status::Todo | Status::Doing) {
+            return false;
+        }
+        !task.children.iter().any(|&cid| {
+            self.task_ref(cid)
+                .map(|c| matches!(c.status, Status::Todo | Status::Doing))
+                .unwrap_or(false)
+        })
+    }
+
+    pub fn doable_count_for_slot(&self, slot: usize) -> usize {
+        let name = match &self.projects[slot] {
+            Some(n) => n.as_str(),
+            None => return 0,
+        };
+        self.tasks.iter().filter(|t| t.project == name && self.is_leaf_task(t)).count()
+    }
+
+    pub fn unc_doable_count(&self) -> usize {
+        self.tasks.iter().filter(|t| self.is_unc(t) && self.is_leaf_task(t)).count()
+    }
+
+    pub fn has_unc_tasks(&self) -> bool {
+        self.tasks.iter().any(|t| self.is_unc(t))
+    }
+
     pub fn visible_tasks_for(&self, col: Column) -> Vec<&Task> {
         let status = col.status();
         let in_col: HashSet<Uuid> = self.tasks.iter()
-            .filter(|t| {
-                t.status == status
-                    && (self.active_projects.is_empty()
-                        || self.active_projects.iter().any(|f| project_matches(&t.project, f)))
-            })
+            .filter(|t| t.status == status && self.task_visible(t))
             .map(|t| t.id)
             .collect();
 
@@ -179,6 +231,12 @@ impl App {
             self.cursor[i] = 0;
         } else if self.cursor[i] >= len {
             self.cursor[i] = len - 1;
+        }
+    }
+
+    pub fn clamp_all_cursors(&mut self) {
+        for col in [Column::Todo, Column::Doing, Column::Done] {
+            self.clamp_cursor(col);
         }
     }
 
@@ -322,9 +380,6 @@ impl App {
         self.cursor[Self::col_index(col)] = group_end;
     }
 
-    /// Returns the last visible index of the group that starts at `start`.
-    /// A group is an orphan-sibling set (consecutive items sharing the same ghost parent)
-    /// or a root task followed by all its direct children.
     fn group_end(&self, visible: &[Uuid], start: usize) -> usize {
         let id = visible[start];
         let task = match self.task_ref(id) {
@@ -334,7 +389,6 @@ impl App {
 
         if let Some(pid) = task.parent_id {
             if !visible.contains(&pid) {
-                // Ghost parent: extend while consecutive siblings share the same parent
                 let mut end = start;
                 while end + 1 < visible.len() {
                     let next_pid = self.task_ref(visible[end + 1]).and_then(|t| t.parent_id);
@@ -344,7 +398,6 @@ impl App {
             }
         }
 
-        // Root task: extend while the next item is a direct child of this task
         let mut end = start;
         while end + 1 < visible.len() {
             let next_pid = self.task_ref(visible[end + 1]).and_then(|t| t.parent_id);
@@ -353,7 +406,6 @@ impl App {
         end
     }
 
-    /// Returns the first visible index of the group that ends at `end`.
     fn group_start(&self, visible: &[Uuid], end: usize) -> usize {
         let id = visible[end];
         let task = match self.task_ref(id) {
@@ -362,11 +414,9 @@ impl App {
         };
 
         if let Some(pid) = task.parent_id {
-            // Visible parent: the whole parent+children block is the group
             if let Some(parent_vis) = visible.iter().position(|&v| v == pid) {
                 return parent_vis;
             }
-            // Ghost parent: extend backwards while consecutive siblings share the same parent
             let mut start = end;
             while start > 0 {
                 let prev_pid = self.task_ref(visible[start - 1]).and_then(|t| t.parent_id);
@@ -449,7 +499,19 @@ impl App {
 
     // ── Insert ───────────────────────────────────────────────────────────────
 
-    /// 'o' — create sibling after current card (or new top-level if column empty)
+    /// Returns the project name to use for a new task given the current filter state.
+    /// If exactly one project slot is active, use that project; otherwise use empty (unc).
+    pub fn default_project_for_insert(&self) -> String {
+        let active: Vec<usize> = (0..10)
+            .filter(|&i| self.active_slots[i] && self.projects[i].is_some())
+            .collect();
+        if active.len() == 1 {
+            self.projects[active[0]].clone().unwrap_or_default()
+        } else {
+            String::new()
+        }
+    }
+
     pub fn begin_insert_after(&mut self) {
         let col = self.focused_col;
         let current_id = self.selected_task_id(col);
@@ -457,7 +519,7 @@ impl App {
             let task = self.task_ref(id).unwrap();
             (task.parent_id, task.project.clone(), InsertPosition::AfterSibling(id))
         } else {
-            let project = self.active_projects.first().cloned().unwrap_or_else(|| "none".into());
+            let project = self.default_project_for_insert();
             (None, project, InsertPosition::AtBeginning)
         };
         self.insert = Some(InsertState {
@@ -470,7 +532,6 @@ impl App {
         self.mode = Mode::Insert;
     }
 
-    /// 'O' — create sibling before current card
     pub fn begin_insert_before(&mut self) {
         let col = self.focused_col;
         let current_id = match self.selected_task_id(col) {
@@ -575,7 +636,6 @@ impl App {
                 }
             }
 
-            // Move cursor to the newly created card
             let col = match status {
                 Status::Todo => Column::Todo,
                 Status::Doing => Column::Doing,
@@ -590,29 +650,6 @@ impl App {
     }
 
     // ── Edit ─────────────────────────────────────────────────────────────────
-
-    pub fn begin_move_project(&mut self) {
-        let col = self.focused_col;
-        if let Some(id) = self.selected_task_id(col) {
-            let root_id = self.root_task_id(id);
-            let project = self.task_ref(root_id).map(|t| t.project.clone()).unwrap_or_default();
-            self.move_state = Some(MoveState {
-                task_id: root_id,
-                target_input: project,
-                suggestion_cursor: None,
-                suggestion_query: None,
-            });
-            self.mode = Mode::Move;
-        }
-    }
-
-    fn root_task_id(&self, id: Uuid) -> Uuid {
-        let mut current = id;
-        while let Some(parent_id) = self.task_ref(current).and_then(|t| t.parent_id) {
-            current = parent_id;
-        }
-        current
-    }
 
     pub fn begin_edit(&mut self) {
         let col = self.focused_col;
@@ -642,38 +679,114 @@ impl App {
         self.mode = Mode::Normal;
     }
 
-    // ── Filter ───────────────────────────────────────────────────────────────
+    // ── Project filter ────────────────────────────────────────────────────────
 
-    pub fn begin_filter(&mut self) {
-        self.filter = Some(FilterState { input: String::new() });
-        self.mode = Mode::Filter;
+    pub fn toggle_slot(&mut self, slot: usize) {
+        let now = Instant::now();
+        let is_double = self.last_digit_press
+            .map(|(s, t)| s == slot && now.duration_since(t).as_millis() < 500)
+            .unwrap_or(false);
+
+        if is_double {
+            for i in 0..10 {
+                self.active_slots[i] = i == slot;
+            }
+            self.show_unc = false;
+            self.last_digit_press = None;
+        } else {
+            self.active_slots[slot] = !self.active_slots[slot];
+            self.last_digit_press = Some((slot, now));
+        }
+        self.clamp_all_cursors();
     }
 
-    pub fn commit_filter(&mut self) {
-        if let Some(fs) = self.filter.take() {
-            if fs.input.is_empty() {
-                self.active_projects.clear();
+    pub fn toggle_unc(&mut self) {
+        let now = Instant::now();
+        let is_double = self.last_unc_press
+            .map(|t| now.duration_since(t).as_millis() < 500)
+            .unwrap_or(false);
+
+        if is_double {
+            for i in 0..10 {
+                self.active_slots[i] = false;
+            }
+            self.show_unc = true;
+            self.last_unc_press = None;
+        } else {
+            self.show_unc = !self.show_unc;
+            self.last_unc_press = Some(now);
+        }
+        self.clamp_all_cursors();
+    }
+
+    pub fn enable_all(&mut self) {
+        self.active_slots = [true; 10];
+        self.show_unc = true;
+        self.clamp_all_cursors();
+    }
+
+    pub fn disable_all(&mut self) {
+        self.active_slots = [false; 10];
+        self.show_unc = false;
+        self.clamp_all_cursors();
+    }
+
+    // ── Project management ────────────────────────────────────────────────────
+
+    pub fn begin_project_edit(&mut self) {
+        let input = self.projects[0].clone().unwrap_or_default();
+        self.project_edit = Some(ProjectEditState { slot: 0, input });
+        self.mode = Mode::ProjectEdit;
+    }
+
+    /// Save current slot input and move by delta (-1 or +1).
+    pub fn project_edit_navigate(&mut self, delta: i32) {
+        if let Some(ref mut pe) = self.project_edit {
+            let name = pe.input.trim().to_string();
+            self.projects[pe.slot] = if name.is_empty() { None } else { Some(name) };
+            let new_slot = ((pe.slot as i32 + delta).rem_euclid(10)) as usize;
+            pe.slot = new_slot;
+            pe.input = self.projects[new_slot].clone().unwrap_or_default();
+        }
+    }
+
+    pub fn commit_project_edit(&mut self) {
+        if let Some(pe) = self.project_edit.take() {
+            let name = pe.input.trim().to_string();
+            self.projects[pe.slot] = if name.is_empty() { None } else { Some(name) };
+        }
+        self.mode = Mode::Normal;
+    }
+
+    // ── Move task to project ──────────────────────────────────────────────────
+
+    pub fn begin_move_project(&mut self) {
+        let col = self.focused_col;
+        if let Some(id) = self.selected_task_id(col) {
+            let root_id = self.root_task_id(id);
+            self.move_state = Some(MoveState { task_id: root_id });
+            self.mode = Mode::Move;
+        }
+    }
+
+    pub fn move_to_slot(&mut self, slot: usize) {
+        if let Some(ms) = self.move_state.take() {
+            if let Some(name) = self.projects[slot].clone() {
+                self.set_project_recursive(ms.task_id, name);
             } else {
-                self.active_projects = self.all_projects()
-                    .into_iter()
-                    .filter(|p| !segment_boundary_matches(p, &fs.input).is_empty())
-                    .collect();
+                // Empty slot → assign to unc (empty project)
+                self.set_project_recursive(ms.task_id, String::new());
             }
         }
         self.mode = Mode::Normal;
-        for col in [Column::Todo, Column::Doing, Column::Done] {
-            self.clamp_cursor(col);
+    }
+
+    fn root_task_id(&self, id: Uuid) -> Uuid {
+        let mut current = id;
+        while let Some(parent_id) = self.task_ref(current).and_then(|t| t.parent_id) {
+            current = parent_id;
         }
-    }
-
-    pub fn clear_filter(&mut self) {
-        self.active_projects.clear();
-        self.filter = None;
-        self.mode = Mode::Normal;
-    }
-
-    pub fn all_projects(&self) -> Vec<String> {
-        collect_projects(&self.tasks)
+        current
     }
 
     pub fn set_project_recursive(&mut self, id: Uuid, project: String) {
@@ -684,18 +797,6 @@ impl App {
         for child_id in children {
             self.set_project_recursive(child_id, project.clone());
         }
-    }
-
-    pub fn move_suggestions(&self) -> Vec<String> {
-        let ms = match self.move_state.as_ref() {
-            Some(ms) => ms,
-            None => return Vec::new(),
-        };
-        let query = ms.suggestion_query.as_deref().unwrap_or(&ms.target_input);
-        self.all_projects()
-            .into_iter()
-            .filter(|p| p.to_lowercase().starts_with(&query.to_lowercase()))
-            .collect()
     }
 
     // ── Insert indent ────────────────────────────────────────────────────────
@@ -745,5 +846,4 @@ impl App {
         state.project = project;
         state.position = InsertPosition::AfterSibling(parent_id);
     }
-
 }

@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{App, ConfirmAction, Mode};
 
@@ -13,15 +13,15 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::Normal => handle_normal(app, key),
         Mode::Insert => handle_insert(app, key),
         Mode::Edit => handle_edit(app, key),
-        Mode::Filter => handle_filter(app, key),
         Mode::Move => handle_move(app, key),
+        Mode::ProjectEdit => handle_project_edit(app, key),
         Mode::Confirm(action) => handle_confirm(app, key, action.clone()),
+        Mode::Help => handle_help(app, key),
     }
 }
 
 fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
-        // Quit
         KeyCode::Char('q') => return AppAction::Quit,
 
         // Navigation
@@ -60,13 +60,6 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         // Delete
         KeyCode::Char('d') => app.delete_selected(),
 
-        // Filter
-        KeyCode::Char('f') => app.begin_filter(),
-        KeyCode::Char('F') => {
-            app.clear_filter();
-            return AppAction::None;
-        }
-
         // Make child of task above
         KeyCode::Char('>') => {
             app.make_child();
@@ -78,8 +71,32 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
-        // Move card to project
+        // Move card to project (wait for digit)
         KeyCode::Char('m') => app.begin_move_project(),
+
+        // Project slot toggles (1-9, 0)
+        KeyCode::Char(c @ '1'..='9') => {
+            let slot = (c as u8 - b'1') as usize;
+            app.toggle_slot(slot);
+        }
+        KeyCode::Char('0') => {
+            app.toggle_slot(9);
+        }
+
+        // Toggle unclassified tasks
+        KeyCode::Char('`') => {
+            app.toggle_unc();
+        }
+
+        // Enable / disable all project pills
+        KeyCode::Char('=') => app.enable_all(),
+        KeyCode::Char('-') => app.disable_all(),
+
+        // Project slot management
+        KeyCode::Char('P') => app.begin_project_edit(),
+
+        // Help
+        KeyCode::Char('?') => app.mode = Mode::Help,
 
         _ => {}
     }
@@ -150,29 +167,50 @@ fn handle_edit(app: &mut App, key: KeyEvent) -> AppAction {
     AppAction::None
 }
 
-fn handle_filter(app: &mut App, key: KeyEvent) -> AppAction {
-    if app.filter.is_none() {
-        return AppAction::None;
-    }
+fn handle_move(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
         KeyCode::Esc => {
-            app.filter = None;
+            app.move_state = None;
             app.mode = Mode::Normal;
         }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.clear_filter();
+        KeyCode::Char(c @ '1'..='9') => {
+            let slot = (c as u8 - b'1') as usize;
+            app.move_to_slot(slot);
+            return AppAction::Save;
+        }
+        KeyCode::Char('0') => {
+            app.move_to_slot(9);
+            return AppAction::Save;
+        }
+        _ => {}
+    }
+    AppAction::None
+}
+
+fn handle_project_edit(app: &mut App, key: KeyEvent) -> AppAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.project_edit = None;
+            app.mode = Mode::Normal;
         }
         KeyCode::Enter => {
-            app.commit_filter();
+            app.commit_project_edit();
+            return AppAction::Save;
+        }
+        KeyCode::Left => {
+            app.project_edit_navigate(-1);
+        }
+        KeyCode::Right => {
+            app.project_edit_navigate(1);
         }
         KeyCode::Backspace => {
-            if let Some(ref mut state) = app.filter {
-                state.input.pop();
+            if let Some(ref mut pe) = app.project_edit {
+                pe.input.pop();
             }
         }
         KeyCode::Char(c) => {
-            if let Some(ref mut state) = app.filter {
-                state.input.push(c);
+            if let Some(ref mut pe) = app.project_edit {
+                pe.input.push(c);
             }
         }
         _ => {}
@@ -180,75 +218,10 @@ fn handle_filter(app: &mut App, key: KeyEvent) -> AppAction {
     AppAction::None
 }
 
-fn handle_move(app: &mut App, key: KeyEvent) -> AppAction {
+fn handle_help(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
-        KeyCode::Esc => {
-            app.move_state = None;
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
             app.mode = Mode::Normal;
-        }
-        KeyCode::Enter => {
-            if let Some(ms) = app.move_state.take() {
-                let target = ms.target_input.trim().to_string();
-                if !target.is_empty() {
-                    app.set_project_recursive(ms.task_id, target);
-                }
-            }
-            app.mode = Mode::Normal;
-            return AppAction::Save;
-        }
-        KeyCode::Tab => {
-            let suggestions = app.move_suggestions();
-            if let Some(ref mut ms) = app.move_state {
-                if let Some(cursor) = ms.suggestion_cursor {
-                    if let Some(s) = suggestions.get(cursor) {
-                        ms.target_input = s.clone();
-                    }
-                    ms.suggestion_cursor = None;
-                    ms.suggestion_query = None;
-                } else if !suggestions.is_empty() {
-                    ms.suggestion_query = Some(ms.target_input.clone());
-                    ms.target_input = suggestions[0].clone();
-                    ms.suggestion_cursor = Some(0);
-                }
-            }
-        }
-        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let suggestions = app.move_suggestions();
-            if let Some(ref mut ms) = app.move_state {
-                if let Some(cursor) = ms.suggestion_cursor {
-                    let next = (cursor + 1).min(suggestions.len().saturating_sub(1));
-                    ms.suggestion_cursor = Some(next);
-                    if let Some(s) = suggestions.get(next) {
-                        ms.target_input = s.clone();
-                    }
-                }
-            }
-        }
-        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let suggestions = app.move_suggestions();
-            if let Some(ref mut ms) = app.move_state {
-                if let Some(cursor) = ms.suggestion_cursor {
-                    let prev = cursor.saturating_sub(1);
-                    ms.suggestion_cursor = Some(prev);
-                    if let Some(s) = suggestions.get(prev) {
-                        ms.target_input = s.clone();
-                    }
-                }
-            }
-        }
-        KeyCode::Backspace => {
-            if let Some(ref mut ms) = app.move_state {
-                ms.target_input.pop();
-                ms.suggestion_cursor = None;
-                ms.suggestion_query = None;
-            }
-        }
-        KeyCode::Char(c) => {
-            if let Some(ref mut ms) = app.move_state {
-                ms.target_input.push(c);
-                ms.suggestion_cursor = None;
-                ms.suggestion_query = None;
-            }
         }
         _ => {}
     }
@@ -270,4 +243,3 @@ fn handle_confirm(app: &mut App, key: KeyEvent, action: ConfirmAction) -> AppAct
     }
     AppAction::None
 }
-

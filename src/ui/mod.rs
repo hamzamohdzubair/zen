@@ -1,6 +1,5 @@
 mod board;
-mod filter;
-mod move_popup;
+mod help;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -25,28 +24,26 @@ pub fn draw(frame: &mut Frame, app: &App) {
     board::draw_board(frame, app, chunks[0]);
     draw_status(frame, app, chunks[1]);
 
-    if let Mode::Filter = &app.mode {
-        let popup = filter::popup_rect(app, area);
-        filter::draw_filter_popup(frame, app, popup);
-    }
-    if let Mode::Move = &app.mode {
-        if app.move_state.as_ref().map(|ms| ms.suggestion_cursor.is_some()).unwrap_or(false) {
-            let popup = move_popup::popup_rect(app, area);
-            move_popup::draw_move_popup(frame, app, popup);
-        }
+    if matches!(app.mode, Mode::Help) {
+        help::draw_help(frame);
     }
 }
 
 const SEP: &str = "│";
+
+fn slot_key_label(slot: usize) -> char {
+    if slot == 9 { '0' } else { (b'1' + slot as u8) as char }
+}
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let mode_str = match &app.mode {
         Mode::Normal => "NORMAL",
         Mode::Insert => "INSERT",
         Mode::Edit => "EDIT",
-        Mode::Filter => "FILTER",
         Mode::Move => "MOVE",
+        Mode::ProjectEdit => "PROJ",
         Mode::Confirm(_) => "CONFIRM",
+        Mode::Help => "HELP",
     };
 
     let sep_style = Style::default().fg(Color::Indexed(240));
@@ -58,16 +55,13 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
-    // Inline prompt between mode pill and project pills
     match &app.mode {
         Mode::Move => {
-            if let Some(ms) = &app.move_state {
-                spans.push(Span::styled(SEP, sep_style));
-                spans.push(Span::styled(
-                    format!(" {}█ ", ms.target_input),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ));
-            }
+            spans.push(Span::styled(SEP, sep_style));
+            spans.push(Span::styled(
+                " press 1-9 or 0 to assign project ",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
         }
         Mode::Confirm(action) => {
             use crate::app::ConfirmAction;
@@ -87,22 +81,57 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 
     spans.push(Span::styled(SEP, sep_style));
 
-    // All projects with "none" pinned first, no spaces between pills
-    let mut projects = app.all_projects();
-    if let Some(idx) = projects.iter().position(|p| p == "none") {
-        let none = projects.remove(idx);
-        projects.insert(0, none);
-    }
+    if matches!(app.mode, Mode::ProjectEdit) {
+        // Show all 10 slots with cursor on editing slot
+        let pe = app.project_edit.as_ref().unwrap();
+        for slot in 0..10 {
+            let key = slot_key_label(slot);
+            let (label, style) = if slot == pe.slot {
+                let text = format!(" {}:{}\u{2588} ", key, pe.input);
+                (text, Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
+            } else {
+                match &app.projects[slot] {
+                    Some(name) => {
+                        let color = project_to_color(name);
+                        let text = format!(" {}:{} ", key, name);
+                        (text, Style::default().fg(Color::Black).bg(color))
+                    }
+                    None => {
+                        let text = format!(" {}: ", key);
+                        (text, Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235)))
+                    }
+                }
+            };
+            spans.push(Span::styled(label, style));
+        }
+    } else {
+        // Show unc pill (leftmost) if there are any unc tasks
+        if app.has_unc_tasks() {
+            let count = app.unc_doable_count();
+            let is_active = app.show_unc;
+            let pill_style = if is_active {
+                Style::default().fg(Color::Black).bg(Color::Indexed(102)).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
+            };
+            spans.push(Span::styled(format!(" `unc({}) ", count), pill_style));
+        }
 
-    for proj in &projects {
-        let is_active = app.active_projects.is_empty() || app.active_projects.contains(proj);
-        let color = project_to_color(proj);
-        let pill_style = if is_active {
-            Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
-        };
-        spans.push(Span::styled(format!(" {} ", proj), pill_style));
+        // Show named project pills for non-empty slots
+        for slot in 0..10 {
+            if let Some(name) = &app.projects[slot] {
+                let key = slot_key_label(slot);
+                let count = app.doable_count_for_slot(slot);
+                let is_active = app.active_slots[slot];
+                let color = project_to_color(name);
+                let pill_style = if is_active {
+                    Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
+                };
+                spans.push(Span::styled(format!(" {}:{} ({}) ", key, name, count), pill_style));
+            }
+        }
     }
 
     if let Some(msg) = &app.status_message {
@@ -120,8 +149,9 @@ fn mode_color(mode: &Mode) -> Color {
         Mode::Normal => Color::Blue,
         Mode::Insert => Color::Green,
         Mode::Edit => Color::Yellow,
-        Mode::Filter => Color::Magenta,
         Mode::Move => Color::Cyan,
+        Mode::ProjectEdit => Color::Magenta,
         Mode::Confirm(_) => Color::Red,
+        Mode::Help => Color::Indexed(240),
     }
 }
