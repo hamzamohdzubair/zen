@@ -59,7 +59,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Move => {
             spans.push(Span::styled(SEP, sep_style));
             spans.push(Span::styled(
-                " press 1-9 or 0 to assign project ",
+                " 0-9 ",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ));
         }
@@ -114,7 +114,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
             };
-            spans.push(Span::styled(format!(" `unc({}) ", count), pill_style));
+            spans.push(Span::styled(format!(" `:unc({}) ", count), pill_style));
         }
 
         // Show named project pills for non-empty slots

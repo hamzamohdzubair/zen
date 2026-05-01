@@ -879,3 +879,384 @@ impl App {
         state.position = InsertPosition::AfterSibling(parent_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Status, Task};
+
+    fn no_projects() -> [Option<String>; 10] {
+        Default::default()
+    }
+
+    fn with_projects(names: &[&str]) -> [Option<String>; 10] {
+        let mut p: [Option<String>; 10] = Default::default();
+        for (i, name) in names.iter().enumerate().take(10) {
+            p[i] = Some((*name).to_string());
+        }
+        p
+    }
+
+    fn task(title: &str, project: &str, status: Status) -> Task {
+        Task::new(title.into(), project.into(), status)
+    }
+
+    fn empty_app() -> App {
+        App::new(vec![], no_projects())
+    }
+
+    // ── Column ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn column_next_clamps_at_done() {
+        assert_eq!(Column::Todo.next(), Column::Doing);
+        assert_eq!(Column::Doing.next(), Column::Done);
+        assert_eq!(Column::Done.next(), Column::Done);
+    }
+
+    #[test]
+    fn column_prev_clamps_at_todo() {
+        assert_eq!(Column::Done.prev(), Column::Doing);
+        assert_eq!(Column::Doing.prev(), Column::Todo);
+        assert_eq!(Column::Todo.prev(), Column::Todo);
+    }
+
+    #[test]
+    fn column_status_maps_correctly() {
+        assert_eq!(Column::Todo.status(), Status::Todo);
+        assert_eq!(Column::Doing.status(), Status::Doing);
+        assert_eq!(Column::Done.status(), Status::Done);
+    }
+
+    // ── is_unc / slot_for_project ────────────────────────────────────────────
+
+    #[test]
+    fn is_unc_empty_project() {
+        let app = App::new(vec![], with_projects(&["work"]));
+        let t = task("x", "", Status::Todo);
+        assert!(app.is_unc(&t));
+    }
+
+    #[test]
+    fn is_unc_no_slot_match() {
+        let app = App::new(vec![], with_projects(&["work"]));
+        let t = task("x", "personal", Status::Todo);
+        assert!(app.is_unc(&t));
+    }
+
+    #[test]
+    fn is_unc_false_when_slot_matches() {
+        let app = App::new(vec![], with_projects(&["work"]));
+        let t = task("x", "work", Status::Todo);
+        assert!(!app.is_unc(&t));
+    }
+
+    // ── task_visible ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn task_visible_unc_respects_show_unc() {
+        let mut app = App::new(vec![], no_projects());
+        let t = task("x", "", Status::Todo);
+        app.show_unc = true;
+        assert!(app.task_visible(&t));
+        app.show_unc = false;
+        assert!(!app.task_visible(&t));
+    }
+
+    #[test]
+    fn task_visible_slot_respects_active_slots() {
+        let mut app = App::new(vec![], with_projects(&["work"]));
+        let t = task("x", "work", Status::Todo);
+        app.active_slots[0] = true;
+        assert!(app.task_visible(&t));
+        app.active_slots[0] = false;
+        assert!(!app.task_visible(&t));
+    }
+
+    // ── is_leaf_task ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_leaf_task_done_task_is_not_leaf() {
+        let app = empty_app();
+        let t = task("x", "", Status::Done);
+        assert!(!app.is_leaf_task(&t));
+    }
+
+    #[test]
+    fn is_leaf_task_todo_with_no_children_is_leaf() {
+        let app = empty_app();
+        let t = task("x", "", Status::Todo);
+        assert!(app.is_leaf_task(&t));
+    }
+
+    #[test]
+    fn is_leaf_task_false_when_has_active_child() {
+        let mut parent = task("parent", "", Status::Todo);
+        let child = task("child", "", Status::Todo);
+        parent.children.push(child.id);
+        let app = App::new(vec![parent.clone(), child], no_projects());
+        assert!(!app.is_leaf_task(&parent));
+    }
+
+    // ── visible_tasks_for ─────────────────────────────────────────────────────
+
+    #[test]
+    fn visible_tasks_for_returns_matching_visible_tasks() {
+        let t1 = task("a", "", Status::Todo);
+        let t2 = task("b", "", Status::Doing);
+        let app = App::new(vec![t1.clone(), t2.clone()], no_projects());
+        let todo = app.visible_tasks_for(Column::Todo);
+        assert_eq!(todo.len(), 1);
+        assert_eq!(todo[0].id, t1.id);
+    }
+
+    #[test]
+    fn visible_tasks_for_respects_show_unc() {
+        let t = task("a", "", Status::Todo);
+        let mut app = App::new(vec![t], no_projects());
+        app.show_unc = false;
+        assert!(app.visible_tasks_for(Column::Todo).is_empty());
+    }
+
+    #[test]
+    fn visible_tasks_for_orders_children_after_parent() {
+        let mut parent = task("parent", "", Status::Todo);
+        let child = task("child", "", Status::Todo);
+        parent.children.push(child.id);
+        let child_id = child.id;
+        let parent_id = parent.id;
+        let mut child2 = child.clone();
+        child2.parent_id = Some(parent_id);
+        let app = App::new(vec![parent, child2], no_projects());
+        let visible = app.visible_tasks_for(Column::Todo);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].id, parent_id);
+        assert_eq!(visible[1].id, child_id);
+    }
+
+    // ── Navigation ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn move_cursor_up_clamps_at_zero() {
+        let mut app = App::new(vec![task("x", "", Status::Todo)], no_projects());
+        app.cursor[0] = 0;
+        app.move_cursor_up();
+        assert_eq!(app.cursor[0], 0);
+    }
+
+    #[test]
+    fn move_cursor_down_clamps_at_last() {
+        let t1 = task("a", "", Status::Todo);
+        let t2 = task("b", "", Status::Todo);
+        let mut app = App::new(vec![t1, t2], no_projects());
+        app.cursor[0] = 1;
+        app.move_cursor_down();
+        assert_eq!(app.cursor[0], 1);
+    }
+
+    #[test]
+    fn focus_next_prev_col() {
+        let mut app = empty_app();
+        assert_eq!(app.focused_col, Column::Todo);
+        app.focus_next_col();
+        assert_eq!(app.focused_col, Column::Doing);
+        app.focus_next_col();
+        assert_eq!(app.focused_col, Column::Done);
+        app.focus_next_col(); // clamps
+        assert_eq!(app.focused_col, Column::Done);
+        app.focus_prev_col();
+        assert_eq!(app.focused_col, Column::Doing);
+    }
+
+    // ── Task movement ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn move_selected_right_changes_status() {
+        let t = task("x", "", Status::Todo);
+        let id = t.id;
+        let mut app = App::new(vec![t], no_projects());
+        app.focused_col = Column::Todo;
+        app.move_selected_right();
+        let moved = app.task_ref(id).unwrap();
+        assert_eq!(moved.status, Status::Doing);
+        assert_eq!(app.focused_col, Column::Doing);
+    }
+
+    #[test]
+    fn move_selected_left_changes_status() {
+        let t = task("x", "", Status::Doing);
+        let id = t.id;
+        let mut app = App::new(vec![t], no_projects());
+        app.focused_col = Column::Doing;
+        app.move_selected_left();
+        let moved = app.task_ref(id).unwrap();
+        assert_eq!(moved.status, Status::Todo);
+    }
+
+    #[test]
+    fn move_selected_right_at_done_is_noop() {
+        let t = task("x", "", Status::Done);
+        let id = t.id;
+        let mut app = App::new(vec![t], no_projects());
+        app.focused_col = Column::Done;
+        app.move_selected_right();
+        assert_eq!(app.task_ref(id).unwrap().status, Status::Done);
+    }
+
+    // ── make_child / make_root ────────────────────────────────────────────────
+
+    #[test]
+    fn make_child_links_parent_and_child() {
+        let parent = task("parent", "", Status::Todo);
+        let child = task("child", "", Status::Todo);
+        let parent_id = parent.id;
+        let child_id = child.id;
+        let mut app = App::new(vec![parent, child], no_projects());
+        app.focused_col = Column::Todo;
+        app.cursor[0] = 1; // select child (second visible task)
+        app.make_child();
+        assert_eq!(app.task_ref(child_id).unwrap().parent_id, Some(parent_id));
+        assert!(app.task_ref(parent_id).unwrap().children.contains(&child_id));
+    }
+
+    #[test]
+    fn make_root_removes_parent_link() {
+        let mut parent = task("parent", "", Status::Todo);
+        let mut child = task("child", "", Status::Todo);
+        let parent_id = parent.id;
+        let child_id = child.id;
+        child.parent_id = Some(parent_id);
+        parent.children.push(child_id);
+        let mut app = App::new(vec![parent, child], no_projects());
+        app.focused_col = Column::Todo;
+        // child appears second in visible list
+        app.cursor[0] = 1;
+        app.make_root();
+        assert!(app.task_ref(child_id).unwrap().parent_id.is_none());
+        assert!(!app.task_ref(parent_id).unwrap().children.contains(&child_id));
+    }
+
+    // ── confirm_delete ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn confirm_delete_removes_task_and_orphans_children() {
+        let mut parent = task("parent", "", Status::Todo);
+        let mut child = task("child", "", Status::Todo);
+        let parent_id = parent.id;
+        let child_id = child.id;
+        child.parent_id = Some(parent_id);
+        parent.children.push(child_id);
+        let mut app = App::new(vec![parent, child], no_projects());
+        app.confirm_delete(parent_id);
+        assert!(app.task_ref(parent_id).is_none());
+        assert!(app.task_ref(child_id).unwrap().parent_id.is_none());
+    }
+
+    // ── toggle_slot / enable_all / disable_all ────────────────────────────────
+
+    #[test]
+    fn toggle_slot_flips_slot() {
+        let mut app = App::new(vec![], with_projects(&["work"]));
+        assert!(app.active_slots[0]);
+        app.toggle_slot(0);
+        assert!(!app.active_slots[0]);
+        app.toggle_slot(0);
+        assert!(app.active_slots[0]);
+    }
+
+    #[test]
+    fn enable_all_resets_everything() {
+        let mut app = App::new(vec![], with_projects(&["work"]));
+        app.active_slots = [false; 10];
+        app.show_unc = false;
+        app.enable_all();
+        assert!(app.active_slots.iter().all(|&s| s));
+        assert!(app.show_unc);
+    }
+
+    #[test]
+    fn disable_all_hides_everything() {
+        let mut app = empty_app();
+        app.disable_all();
+        assert!(app.active_slots.iter().all(|&s| !s));
+        assert!(!app.show_unc);
+    }
+
+    // ── default_project_for_insert ────────────────────────────────────────────
+
+    #[test]
+    fn default_project_empty_when_multiple_active() {
+        let app = App::new(vec![], with_projects(&["work", "home"]));
+        assert_eq!(app.default_project_for_insert(), "");
+    }
+
+    #[test]
+    fn default_project_uses_sole_active_slot() {
+        let mut app = App::new(vec![], with_projects(&["work", "home"]));
+        app.active_slots = [false; 10];
+        app.active_slots[1] = true;
+        assert_eq!(app.default_project_for_insert(), "home");
+    }
+
+    // ── commit_insert ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn commit_insert_adds_task() {
+        let mut app = empty_app();
+        app.begin_insert_after();
+        app.insert.as_mut().unwrap().title = "new task".into();
+        app.commit_insert();
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].title, "new task");
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn commit_insert_empty_title_aborts() {
+        let mut app = empty_app();
+        app.begin_insert_after();
+        // title stays empty
+        app.commit_insert();
+        assert!(app.tasks.is_empty());
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    // ── set_project_recursive ─────────────────────────────────────────────────
+
+    #[test]
+    fn set_project_recursive_updates_tree() {
+        let mut parent = task("parent", "old", Status::Todo);
+        let mut child = task("child", "old", Status::Todo);
+        let parent_id = parent.id;
+        let child_id = child.id;
+        child.parent_id = Some(parent_id);
+        parent.children.push(child_id);
+        let mut app = App::new(vec![parent, child], no_projects());
+        app.set_project_recursive(parent_id, "new".into());
+        assert_eq!(app.task_ref(parent_id).unwrap().project, "new");
+        assert_eq!(app.task_ref(child_id).unwrap().project, "new");
+    }
+
+    // ── has_unc_tasks / unc_doable_count ──────────────────────────────────────
+
+    #[test]
+    fn has_unc_tasks_detects_unclassified() {
+        let mut app = empty_app();
+        assert!(!app.has_unc_tasks());
+        app.tasks.push(task("x", "", Status::Todo));
+        assert!(app.has_unc_tasks());
+    }
+
+    #[test]
+    fn unc_doable_count_counts_leaf_unc_tasks() {
+        let mut parent = task("parent", "", Status::Todo);
+        let mut child = task("child", "", Status::Todo);
+        let parent_id = parent.id;
+        let child_id = child.id;
+        child.parent_id = Some(parent_id);
+        parent.children.push(child_id);
+        let app = App::new(vec![parent, child], no_projects());
+        // Only the leaf (child) should be counted
+        assert_eq!(app.unc_doable_count(), 1);
+    }
+}
