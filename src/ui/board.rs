@@ -31,6 +31,20 @@ enum DrawItem<'a> {
     Inline,
 }
 
+fn compute_ghost_chain(task_id: Uuid, col_ids: &HashSet<Uuid>, app: &App) -> Vec<Uuid> {
+    let mut chain = vec![];
+    let mut current = task_id;
+    loop {
+        match app.task_ref(current).and_then(|t| t.parent_id) {
+            None => break,
+            Some(pid) if col_ids.contains(&pid) => break,
+            Some(pid) => { chain.push(pid); current = pid; }
+        }
+    }
+    chain.reverse();
+    chain
+}
+
 fn is_descendant_of(task_id: Uuid, ancestor_id: Uuid, app: &App) -> bool {
     let mut current = task_id;
     while let Some(pid) = app.task_ref(current).and_then(|t| t.parent_id) {
@@ -83,36 +97,59 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
 
     let col_ids: HashSet<Uuid> = tasks.iter().map(|t| t.id).collect();
 
+    let ghost_chains: Vec<Vec<Uuid>> = tasks.iter()
+        .map(|task| compute_ghost_chain(task.id, &col_ids, app))
+        .collect();
+
     let mut root_count = 0usize;
     let mut child_counts: HashMap<Uuid, usize> = HashMap::new();
     let mut ghost_numbers: HashMap<Uuid, usize> = HashMap::new();
     let mut depth_map: HashMap<Uuid, usize> = HashMap::new();
-    let task_numbers: Vec<usize> = tasks.iter().map(|task| {
-        let parent_in_col = task.parent_id.map(|pid| col_ids.contains(&pid)).unwrap_or(false);
-        let parent_cross_col = task.parent_id.map(|pid| !col_ids.contains(&pid)).unwrap_or(false);
-        let depth = match task.parent_id {
-            None => 0,
-            Some(pid) if !col_ids.contains(&pid) => 1,
-            Some(pid) => depth_map.get(&pid).copied().unwrap_or(0) + 1,
+
+    // Assign numbers to all ghost ancestors (first encounter wins, outermost first)
+    for chain in &ghost_chains {
+        for (i, &gid) in chain.iter().enumerate() {
+            if ghost_numbers.contains_key(&gid) {
+                continue;
+            }
+            let num = if i == 0 {
+                root_count += 1;
+                root_count
+            } else {
+                let parent_gid = chain[i - 1];
+                let n = child_counts.entry(parent_gid).or_insert(0);
+                *n += 1;
+                *n
+            };
+            ghost_numbers.insert(gid, num);
+        }
+    }
+
+    let task_numbers: Vec<usize> = tasks.iter().enumerate().map(|(i, task)| {
+        let chain = &ghost_chains[i];
+        let depth = if chain.is_empty() {
+            match task.parent_id {
+                None => 0,
+                Some(pid) => depth_map.get(&pid).copied().unwrap_or(0) + 1,
+            }
+        } else {
+            chain.len()
         };
         depth_map.insert(task.id, depth);
-        if parent_in_col {
-            let pid = task.parent_id.unwrap();
-            let n = child_counts.entry(pid).or_insert(0);
-            *n += 1;
-            *n
-        } else if parent_cross_col {
-            let pid = task.parent_id.unwrap();
-            if !ghost_numbers.contains_key(&pid) {
-                root_count += 1;
-                ghost_numbers.insert(pid, root_count);
+        if chain.is_empty() {
+            match task.parent_id {
+                None => { root_count += 1; root_count }
+                Some(pid) => {
+                    let n = child_counts.entry(pid).or_insert(0);
+                    *n += 1;
+                    *n
+                }
             }
-            let n = child_counts.entry(pid).or_insert(0);
+        } else {
+            let immediate = *chain.last().unwrap();
+            let n = child_counts.entry(immediate).or_insert(0);
             *n += 1;
             *n
-        } else {
-            root_count += 1;
-            root_count
         }
     }).collect();
 
@@ -143,7 +180,7 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
     }
 
     let mut y = inner.y;
-    let mut last_ghost_parent: Option<Uuid> = None;
+    let mut last_ghost_chain: Vec<Uuid> = vec![];
 
     for item in &items {
         if y >= inner.y + inner.height {
@@ -152,27 +189,24 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
 
         match item {
             DrawItem::Task { task, task_idx } => {
-                let parent_cross_col = task.parent_id.map(|pid| !col_ids.contains(&pid)).unwrap_or(false);
+                let chain = &ghost_chains[*task_idx];
                 let depth = depth_map.get(&task.id).copied().unwrap_or(0);
 
-                if parent_cross_col {
-                    if let Some(pid) = task.parent_id {
-                        if last_ghost_parent != Some(pid) {
-                            if y < inner.y + inner.height {
-                                if let Some(parent) = app.task_ref(pid) {
-                                    let ghost_num = ghost_numbers.get(&pid).copied().unwrap_or(0);
-                                    draw_ghost_card(frame, parent, ghost_num, Rect { x: inner.x, y, width: inner.width, height: 1 });
-                                    y += 1;
-                                }
-                            }
-                            last_ghost_parent = Some(pid);
+                if !chain.is_empty() {
+                    let common = chain.iter().zip(last_ghost_chain.iter())
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    for (ci, &gid) in chain.iter().enumerate().skip(common) {
+                        if y >= inner.y + inner.height { break; }
+                        if let Some(ancestor) = app.task_ref(gid) {
+                            let ghost_num = ghost_numbers.get(&gid).copied().unwrap_or(0);
+                            draw_ghost_card(frame, ancestor, ghost_num, ci, Rect { x: inner.x, y, width: inner.width, height: 1 });
+                            y += 1;
                         }
                     }
-                    if y >= inner.y + inner.height {
-                        break;
-                    }
+                    last_ghost_chain = chain.clone();
                 } else {
-                    last_ghost_parent = None;
+                    last_ghost_chain = vec![];
                 }
 
                 let selected = is_focused && *task_idx == cur;
@@ -203,7 +237,9 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                 if let Some(state) = &app.insert {
                     let depth = match state.parent_id {
                         None => 0,
-                        Some(pid) if !col_ids.contains(&pid) => 1,
+                        Some(pid) if !col_ids.contains(&pid) => {
+                            compute_ghost_chain(pid, &col_ids, app).len() + 1
+                        }
                         Some(pid) => depth_map.get(&pid).copied().unwrap_or(0) + 1,
                     };
                     draw_inline_card(frame, state, depth, Rect { x: inner.x, y, width: inner.width, height: 1 });
@@ -274,17 +310,21 @@ fn draw_card(
     );
 }
 
-fn draw_ghost_card(frame: &mut Frame, task: &Task, number: usize, area: Rect) {
+fn draw_ghost_card(frame: &mut Frame, task: &Task, number: usize, depth: usize, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
     let bg = Color::Indexed(234);
     let fg = Color::Indexed(239);
+    let mut spans: Vec<Span> = Vec::new();
+    if depth > 0 {
+        let prefix = format!("{}╰─", "  ".repeat(depth - 1));
+        spans.push(Span::styled(prefix, Style::default().fg(fg).bg(bg)));
+    }
+    spans.push(Span::styled(format!("{} ", number), Style::default().fg(fg).bg(bg)));
+    spans.push(Span::styled(task.title.as_str(), Style::default().fg(fg).bg(bg).add_modifier(Modifier::DIM)));
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(format!("{} ", number), Style::default().fg(fg).bg(bg)),
-            Span::styled(task.title.as_str(), Style::default().fg(fg).bg(bg).add_modifier(Modifier::DIM)),
-        ])).style(Style::default().bg(bg)),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
         area,
     );
 }
