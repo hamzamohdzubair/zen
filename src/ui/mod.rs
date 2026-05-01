@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, Mode};
+use crate::app::{App, BulkInsertStep, Mode};
 use board::project_to_color;
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -44,6 +44,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Mode::ProjectEdit => "PROJ",
         Mode::Confirm(_) => "CONFIRM",
         Mode::Help => "HELP",
+        Mode::BulkInsert => "BULK",
     };
 
     let sep_style = Style::default().fg(Color::Indexed(240));
@@ -75,6 +76,16 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
                 }
             };
             spans.push(Span::styled(label, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+        }
+        Mode::BulkInsert => {
+            spans.push(Span::styled(SEP, sep_style));
+            if let Some(ref bs) = app.bulk_insert {
+                let label = match bs.step {
+                    BulkInsertStep::Num => format!(" num: {}\u{2588} ", bs.num_input),
+                    BulkInsertStep::Prefix => format!(" prefix: {}\u{2588} ", bs.prefix_input),
+                };
+                spans.push(Span::styled(label, Style::default().fg(Color::Indexed(208)).add_modifier(Modifier::BOLD)));
+            }
         }
         _ => {}
     }
@@ -153,5 +164,6 @@ fn mode_color(mode: &Mode) -> Color {
         Mode::ProjectEdit => Color::Magenta,
         Mode::Confirm(_) => Color::Red,
         Mode::Help => Color::Indexed(240),
+        Mode::BulkInsert => Color::Indexed(208),
     }
 }

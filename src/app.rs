@@ -13,6 +13,20 @@ pub enum Mode {
     ProjectEdit,
     Confirm(ConfirmAction),
     Help,
+    BulkInsert,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BulkInsertStep {
+    Num,
+    Prefix,
+}
+
+pub struct BulkInsertState {
+    pub step: BulkInsertStep,
+    pub num_input: String,
+    pub num: usize,
+    pub prefix_input: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +110,7 @@ pub struct App {
     pub edit: Option<EditState>,
     pub move_state: Option<MoveState>,
     pub project_edit: Option<ProjectEditState>,
+    pub bulk_insert: Option<BulkInsertState>,
     pub status_message: Option<String>,
     pub last_digit_press: Option<(usize, Instant)>,
     pub last_unc_press: Option<Instant>,
@@ -115,6 +130,7 @@ impl App {
             edit: None,
             move_state: None,
             project_edit: None,
+            bulk_insert: None,
             status_message: None,
             last_digit_press: None,
             last_unc_press: None,
@@ -875,6 +891,83 @@ impl App {
             }
         }
         self.mode = Mode::Normal;
+    }
+
+    // ── Bulk insert ───────────────────────────────────────────────────────────
+
+    pub fn begin_bulk_insert(&mut self) {
+        if self.selected_task_id(self.focused_col).is_none() {
+            return;
+        }
+        self.bulk_insert = Some(BulkInsertState {
+            step: BulkInsertStep::Num,
+            num_input: String::new(),
+            num: 0,
+            prefix_input: String::new(),
+        });
+        self.mode = Mode::BulkInsert;
+    }
+
+    pub fn commit_bulk_insert(&mut self) {
+        let state = match self.bulk_insert.take() {
+            Some(s) => s,
+            None => {
+                self.mode = Mode::Normal;
+                return;
+            }
+        };
+
+        let parent_id = match self.selected_task_id(self.focused_col) {
+            Some(id) => id,
+            None => {
+                self.mode = Mode::Normal;
+                return;
+            }
+        };
+
+        let prefix = state.prefix_input.trim().to_string();
+        if prefix.is_empty() || state.num == 0 {
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        let project = self.task_ref(parent_id).map(|t| t.project.clone()).unwrap_or_default();
+
+        let last_child_tasks_pos = self
+            .task_ref(parent_id)
+            .map(|p| p.children.clone())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|&cid| self.tasks.iter().rposition(|t| t.id == cid))
+            .max();
+
+        let mut insert_pos = match last_child_tasks_pos {
+            Some(pos) => pos + 1,
+            None => self
+                .tasks
+                .iter()
+                .position(|t| t.id == parent_id)
+                .map(|i| i + 1)
+                .unwrap_or(self.tasks.len()),
+        };
+
+        let mut new_child_ids = Vec::new();
+        for i in 1..=state.num {
+            let title = format!("{} {}", prefix, i);
+            let mut task = Task::new(title, project.clone(), Status::Todo);
+            task.parent_id = Some(parent_id);
+            let task_id = task.id;
+            self.tasks.insert(insert_pos, task);
+            insert_pos += 1;
+            new_child_ids.push(task_id);
+        }
+
+        if let Some(parent) = self.task_mut(parent_id) {
+            parent.children.extend(new_child_ids);
+        }
+
+        self.mode = Mode::Normal;
+        self.status_message = Some(format!("Created {} tasks", state.num));
     }
 
     pub fn undone_leaf_count(&self, id: Uuid) -> usize {

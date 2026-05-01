@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{App, Column, ConfirmAction, Mode};
+use crate::app::{App, BulkInsertStep, Column, ConfirmAction, Mode};
 
 pub enum AppAction {
     Quit,
@@ -17,6 +17,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::ProjectEdit => handle_project_edit(app, key),
         Mode::Confirm(action) => handle_confirm(app, key, action.clone()),
         Mode::Help => handle_help(app, key),
+        Mode::BulkInsert => handle_bulk_insert(app, key),
     }
 }
 
@@ -101,6 +102,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         // Enable / disable all project pills
         KeyCode::Char('=') => app.enable_all(),
         KeyCode::Char('-') => app.disable_all(),
+
+        // Bulk insert children
+        KeyCode::Char('A') => app.begin_bulk_insert(),
 
         // Project slot management
         KeyCode::Char('P') => app.begin_project_edit(),
@@ -224,6 +228,58 @@ fn handle_project_edit(app: &mut App, key: KeyEvent) -> AppAction {
             }
         }
         _ => {}
+    }
+    AppAction::None
+}
+
+fn handle_bulk_insert(app: &mut App, key: KeyEvent) -> AppAction {
+    if let Some(ref mut state) = app.bulk_insert {
+        match key.code {
+            KeyCode::Esc => {
+                app.bulk_insert = None;
+                app.mode = Mode::Normal;
+                return AppAction::None;
+            }
+            KeyCode::Enter => {
+                match state.step {
+                    BulkInsertStep::Num => {
+                        if let Ok(n) = state.num_input.trim().parse::<usize>() {
+                            if n > 0 {
+                                state.num = n;
+                                state.step = BulkInsertStep::Prefix;
+                            }
+                        }
+                        return AppAction::None;
+                    }
+                    BulkInsertStep::Prefix => {
+                        let _ = state;
+                        app.commit_bulk_insert();
+                        return AppAction::Save;
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                match state.step {
+                    BulkInsertStep::Num => { state.num_input.pop(); }
+                    BulkInsertStep::Prefix => { state.prefix_input.pop(); }
+                }
+                return AppAction::None;
+            }
+            KeyCode::Char(c) => {
+                match state.step {
+                    BulkInsertStep::Num => {
+                        if c.is_ascii_digit() {
+                            state.num_input.push(c);
+                        }
+                    }
+                    BulkInsertStep::Prefix => {
+                        state.prefix_input.push(c);
+                    }
+                }
+                return AppAction::None;
+            }
+            _ => {}
+        }
     }
     AppAction::None
 }
