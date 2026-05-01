@@ -92,7 +92,7 @@ fn inline_insert_index(app: &App, col: Column) -> Option<usize> {
 fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
     let is_focused = app.focused_col == col;
     let tasks = app.visible_tasks_for(col);
-    let count = tasks.len();
+    let count = tasks.iter().filter(|t| t.children.is_empty()).count();
     let cur = app.cursor_for(col);
 
     let col_ids: HashSet<Uuid> = tasks.iter().map(|t| t.id).collect();
