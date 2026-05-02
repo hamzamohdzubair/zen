@@ -197,22 +197,13 @@ impl App {
         self.clamp_all_cursors();
     }
 
-    /// Enter tree mode for the highest-priority enabled project (v in kanban).
-    /// Priority: slot 0 (key '1') highest … slot 9 (key '0') lowest.
+    /// Enter tree mode, opening INBOX as the default view.
     pub fn enter_planning_by_priority(&mut self) {
-        let target_slot = (0..10usize)
-            .find(|&s| self.active_slots[s] && self.projects[s].is_some());
-
         self.saved_slots = self.active_slots;
         self.saved_show_unc = self.show_unc;
 
         self.active_slots = [false; 10];
-        if let Some(slot) = target_slot {
-            self.active_slots[slot] = true;
-            self.show_unc = false;
-        } else {
-            self.show_unc = true;
-        }
+        self.show_unc = true;
 
         self.view_mode = ViewMode::Tree;
         self.cursor = [0, 0, 0];
@@ -230,6 +221,16 @@ impl App {
     pub fn unfold_selected(&mut self) {
         if let Some(id) = self.selected_task_id(self.focused_col) {
             self.collapsed.remove(&id);
+        }
+    }
+
+    pub fn toggle_fold_selected(&mut self) {
+        if let Some(id) = self.selected_task_id(self.focused_col) {
+            if self.collapsed.contains(&id) {
+                self.collapsed.remove(&id);
+            } else {
+                self.collapsed.insert(id);
+            }
         }
     }
 
@@ -672,6 +673,12 @@ impl App {
             }
         }
         result
+    }
+
+    pub fn first_visible_leaf_id(&self) -> Option<Uuid> {
+        self.dfs_visible_ids()
+            .into_iter()
+            .find(|&id| self.task_ref(id).map(|t| self.is_leaf_task(t)).unwrap_or(false))
     }
 
     fn is_descendant_of(&self, id: Uuid, ancestor_id: Uuid) -> bool {
@@ -1209,6 +1216,16 @@ impl App {
         self.clamp_all_cursors();
     }
 
+    /// In tree mode: exclusively switch to INBOX.
+    pub fn select_inbox(&mut self) {
+        self.active_slots = [false; 10];
+        self.show_unc = true;
+        self.cursor = [0, 0, 0];
+        self.focused_col = Column::Todo;
+        self.tui_scroll_offset = 0;
+        self.clamp_all_cursors();
+    }
+
     pub fn toggle_slot(&mut self, slot: usize) {
         let now = Instant::now();
         let is_double = self.last_digit_press
@@ -1228,7 +1245,8 @@ impl App {
         self.clamp_all_cursors();
     }
 
-    pub fn toggle_unc(&mut self) {
+    /// In board mode: toggle INBOX visibility (double-tap to show exclusively).
+    pub fn toggle_inbox(&mut self) {
         let now = Instant::now();
         let is_double = self.last_unc_press
             .map(|t| now.duration_since(t).as_millis() < 500)

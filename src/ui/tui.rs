@@ -233,6 +233,25 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
     let meta_style = Style::default().fg(Color::Indexed(238));
     let num_style = Style::default().fg(Color::Indexed(245));
 
+    // Find which visible row represents the "next" leaf task.
+    // If the leaf is hidden behind a fold, bubble up to its nearest visible ancestor.
+    let next_row_id: Option<Uuid> = app.first_visible_leaf_id().and_then(|leaf_id| {
+        let row_ids: HashSet<Uuid> = rows.iter().map(|r| r.id).collect();
+        if row_ids.contains(&leaf_id) {
+            return Some(leaf_id);
+        }
+        let tasks_by_id: HashMap<Uuid, &crate::types::Task> =
+            app.tasks.iter().map(|t| (t.id, t)).collect();
+        let mut cur = leaf_id;
+        loop {
+            let parent = tasks_by_id.get(&cur)?.parent_id?;
+            if row_ids.contains(&parent) {
+                return Some(parent);
+            }
+            cur = parent;
+        }
+    });
+
     // Pre-compute hierarchical labels (e.g. "1", "1.1", "1.2", "2") across all rows
     // so that scrolled-off rows still count correctly.
     let mut depth_counters: Vec<usize> = Vec::new();
@@ -294,7 +313,15 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             spans.push(Span::styled(row.display_prefix.clone(), ms));
         }
         if !num_str.is_empty() {
-            let ns = if let Some(bg) = bg { num_style.bg(bg) } else { num_style };
+            let is_next = next_row_id == Some(row.id);
+            let ns = if is_next {
+                let s = Style::default().fg(Color::Indexed(151));
+                if let Some(bg) = bg { s.bg(bg) } else { s }
+            } else if let Some(bg) = bg {
+                num_style.bg(bg)
+            } else {
+                num_style
+            };
             spans.push(Span::styled(num_str, ns));
         }
         if !collapse_indicator.is_empty() {

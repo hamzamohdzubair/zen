@@ -22,13 +22,13 @@ pub fn pill_span(key: char, name: &str, count: usize, active: bool, color: Color
     Span::styled(format!(" {}:{} ({}) ", key, name, count), style)
 }
 
-pub fn unc_pill_span(count: usize, active: bool) -> Span<'static> {
+pub fn inbox_pill_span(count: usize, active: bool) -> Span<'static> {
     let style = if active {
         Style::default().fg(Color::Black).bg(Color::Indexed(102)).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
     };
-    Span::styled(format!(" `:unc({}) ", count), style)
+    Span::styled(format!(" `:INBOX({}) ", count), style)
 }
 
 pub fn slot_key_char(slot: usize) -> char {
@@ -138,10 +138,8 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled(label, style));
         }
     } else {
-        // Show unc pill (leftmost) if there are any unc tasks
-        if app.has_unc_tasks() {
-            spans.push(unc_pill_span(app.unc_doable_count(), app.show_unc));
-        }
+        // INBOX pill — always visible
+        spans.push(inbox_pill_span(app.unc_doable_count(), app.show_unc));
 
         // Show named project pills for non-empty slots
         for slot in 0..10 {

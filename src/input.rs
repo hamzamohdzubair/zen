@@ -44,7 +44,10 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
             ViewMode::Tree => app.select_project_slot(9),
             ViewMode::Board => app.toggle_slot(9),
         },
-        KeyCode::Char('`') => app.toggle_unc(),
+        KeyCode::Char('`') => match app.view_mode {
+            ViewMode::Tree => app.select_inbox(),
+            ViewMode::Board => app.toggle_inbox(),
+        },
         KeyCode::Char('=') => app.enable_all(),
         KeyCode::Char('-') => app.disable_all(),
         KeyCode::Char('P') => app.begin_project_edit(),
@@ -169,7 +172,7 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
 
         // Fold / unfold branch
         KeyCode::Char('h') => app.fold_selected(),
-        KeyCode::Char('l') => app.unfold_selected(),
+        KeyCode::Char('l') => app.toggle_fold_selected(),
 
         _ => {}
     }

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::types::{Status, Task};
 use super::board::project_to_color;
-use super::{pill_span, slot_key_char, unc_pill_span};
+use super::{inbox_pill_span, pill_span, slot_key_char};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum SortBy {
@@ -206,11 +206,8 @@ pub fn draw_done(frame: &mut Frame, app: &mut DoneApp) {
     // Pill row
     let sep = Span::styled("│", Style::default().fg(Color::Indexed(240)));
     let mut pill_spans: Vec<Span<'static>> = vec![];
-    let has_unc = app.tasks.iter().any(|t| t.status == Status::Done && app.is_unc(t));
-    if has_unc {
-        pill_spans.push(unc_pill_span(unc_count, app.show_unc));
-        pill_spans.push(sep.clone());
-    }
+    pill_spans.push(inbox_pill_span(unc_count, app.show_unc));
+    pill_spans.push(sep.clone());
     for slot in 0..10 {
         if let Some(name) = &app.projects[slot] {
             let color = project_to_color(name);
