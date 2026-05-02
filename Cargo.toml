@@ -1,6 +1,6 @@
 [package]
 name = "zen"
-version = "3.1.3"
+version = "3.2.0"
 edition = "2021"
 description = "A modal Kanban TUI for personal task management"
 license = "MIT"
