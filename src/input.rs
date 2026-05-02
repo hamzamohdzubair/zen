@@ -85,7 +85,7 @@ fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Enter => app.enter_planning_for_selected(),
 
         // Enter tree mode for the highest-priority enabled project
-        KeyCode::Char('v') => app.enter_planning_by_priority(),
+        KeyCode::Tab => app.enter_planning_by_priority(),
 
         _ => {}
     }
@@ -103,7 +103,7 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Enter => app.enter_kanban_for_selected(),
 
         // Return to action mode (kanban)
-        KeyCode::Char('v') => app.exit_planning(),
+        KeyCode::Tab => app.exit_planning(),
 
         // Reorder within tree (sibling-aware)
         KeyCode::Char('K') => {

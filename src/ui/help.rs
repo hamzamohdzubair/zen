@@ -51,7 +51,7 @@ const PLANNING_SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "General",
         &[
-            ("v", "back to action mode  (kanban)"),
+            ("Tab", "back to action mode  (kanban)"),
             ("?", "open / close help"),
             ("q", "quit"),
         ],
