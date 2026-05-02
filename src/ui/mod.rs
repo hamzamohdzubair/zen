@@ -1,5 +1,8 @@
 mod board;
 mod help;
+pub mod done;
+pub mod stats;
+pub mod tui;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -7,8 +10,30 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, BulkInsertStep, Mode};
+use crate::app::{App, BulkInsertStep, Mode, ViewMode};
 use board::project_to_color;
+
+pub fn pill_span(key: char, name: &str, count: usize, active: bool, color: Color) -> Span<'static> {
+    let style = if active {
+        Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
+    };
+    Span::styled(format!(" {}:{} ({}) ", key, name, count), style)
+}
+
+pub fn unc_pill_span(count: usize, active: bool) -> Span<'static> {
+    let style = if active {
+        Style::default().fg(Color::Black).bg(Color::Indexed(102)).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
+    };
+    Span::styled(format!(" `:unc({}) ", count), style)
+}
+
+pub fn slot_key_char(slot: usize) -> char {
+    if slot == 9 { '0' } else { (b'1' + slot as u8) as char }
+}
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -21,7 +46,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         ])
         .split(area);
 
-    board::draw_board(frame, app, chunks[0]);
+    match app.view_mode {
+        ViewMode::Tree => tui::draw_tui(frame, app, chunks[0]),
+        ViewMode::Board => board::draw_board(frame, app, chunks[0]),
+    }
     draw_status(frame, app, chunks[1]);
 
     if matches!(app.mode, Mode::Help) {
@@ -31,11 +59,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
 const SEP: &str = "│";
 
-fn slot_key_label(slot: usize) -> char {
-    if slot == 9 { '0' } else { (b'1' + slot as u8) as char }
-}
-
-fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
+pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let mode_str = match &app.mode {
         Mode::Normal => "NORMAL",
         Mode::Insert => "INSERT",
@@ -96,7 +120,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         // Show all 10 slots with cursor on editing slot
         let pe = app.project_edit.as_ref().unwrap();
         for slot in 0..10 {
-            let key = slot_key_label(slot);
+            let key = slot_key_char(slot);
             let (label, style) = if slot == pe.slot {
                 let text = format!(" {}:{}\u{2588} ", key, pe.input);
                 (text, Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
@@ -118,29 +142,16 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         // Show unc pill (leftmost) if there are any unc tasks
         if app.has_unc_tasks() {
-            let count = app.unc_doable_count();
-            let is_active = app.show_unc;
-            let pill_style = if is_active {
-                Style::default().fg(Color::Black).bg(Color::Indexed(102)).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
-            };
-            spans.push(Span::styled(format!(" `:unc({}) ", count), pill_style));
+            spans.push(unc_pill_span(app.unc_doable_count(), app.show_unc));
         }
 
         // Show named project pills for non-empty slots
         for slot in 0..10 {
             if let Some(name) = &app.projects[slot] {
-                let key = slot_key_label(slot);
+                let key = slot_key_char(slot);
                 let count = app.doable_count_for_slot(slot);
-                let is_active = app.active_slots[slot];
                 let color = project_to_color(name);
-                let pill_style = if is_active {
-                    Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
-                };
-                spans.push(Span::styled(format!(" {}:{} ({}) ", key, name, count), pill_style));
+                spans.push(pill_span(key, name, count, app.active_slots[slot], color));
             }
         }
     }

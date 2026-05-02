@@ -35,6 +35,12 @@ pub enum ConfirmAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewMode {
+    Tree,
+    Board,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Column {
     Todo,
     Doing,
@@ -104,8 +110,10 @@ pub struct App {
     pub active_slots: [bool; 10],
     pub show_unc: bool,
     pub mode: Mode,
+    pub view_mode: ViewMode,
     pub focused_col: Column,
     pub cursor: [usize; 3],
+    pub tui_scroll_offset: usize,
     pub insert: Option<InsertState>,
     pub edit: Option<EditState>,
     pub move_state: Option<MoveState>,
@@ -124,8 +132,10 @@ impl App {
             active_slots: [true; 10],
             show_unc: true,
             mode: Mode::Normal,
+            view_mode: ViewMode::Tree,
             focused_col: Column::Todo,
             cursor: [0, 0, 0],
+            tui_scroll_offset: 0,
             insert: None,
             edit: None,
             move_state: None,
@@ -135,6 +145,13 @@ impl App {
             last_digit_press: None,
             last_unc_press: None,
         }
+    }
+
+    pub fn toggle_view(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::Tree => ViewMode::Board,
+            ViewMode::Board => ViewMode::Tree,
+        };
     }
 
     pub fn col_index(col: Column) -> usize {

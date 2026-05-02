@@ -109,6 +109,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         // Project slot management
         KeyCode::Char('P') => app.begin_project_edit(),
 
+        // Toggle view (tree ↔ board)
+        KeyCode::Char('v') => app.toggle_view(),
+
         // Help
         KeyCode::Char('?') => app.mode = Mode::Help,
 
