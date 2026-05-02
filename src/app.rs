@@ -1151,6 +1151,18 @@ impl App {
 
     // ── Project filter ────────────────────────────────────────────────────────
 
+    /// In tree mode: exclusively switch to a single project by slot number.
+    pub fn select_project_slot(&mut self, slot: usize) {
+        if self.projects[slot].is_none() { return; }
+        self.active_slots = [false; 10];
+        self.active_slots[slot] = true;
+        self.show_unc = false;
+        self.cursor = [0, 0, 0];
+        self.focused_col = Column::Todo;
+        self.tui_scroll_offset = 0;
+        self.clamp_all_cursors();
+    }
+
     pub fn toggle_slot(&mut self, slot: usize) {
         let now = Instant::now();
         let is_double = self.last_digit_press

@@ -29,8 +29,17 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('j') | KeyCode::Down => app.move_cursor_down(),
         KeyCode::Char('k') | KeyCode::Up => app.move_cursor_up(),
 
-        KeyCode::Char(c @ '1'..='9') => app.toggle_slot((c as u8 - b'1') as usize),
-        KeyCode::Char('0') => app.toggle_slot(9),
+        KeyCode::Char(c @ '1'..='9') => {
+            let slot = (c as u8 - b'1') as usize;
+            match app.view_mode {
+                ViewMode::Tree => app.select_project_slot(slot),
+                ViewMode::Board => app.toggle_slot(slot),
+            }
+        }
+        KeyCode::Char('0') => match app.view_mode {
+            ViewMode::Tree => app.select_project_slot(9),
+            ViewMode::Board => app.toggle_slot(9),
+        },
         KeyCode::Char('`') => app.toggle_unc(),
         KeyCode::Char('=') => app.enable_all(),
         KeyCode::Char('-') => app.disable_all(),
