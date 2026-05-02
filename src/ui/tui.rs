@@ -248,7 +248,8 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let is_inline = row.id == Uuid::nil();
 
         let is_selected = selected_id == Some(row.id);
-        let is_editing = matches!((&app.mode, &app.edit), (Mode::Edit, Some(es)) if es.task_id == row.id);
+        let is_editing = app.mode == Mode::Edit
+            && app.edit.as_ref().map(|es| es.task_id == row.id).unwrap_or(false);
         let bg = if is_editing {
             Some(Color::Rgb(30, 75, 45))
         } else if is_selected {
@@ -265,18 +266,11 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         };
         let prefix_chars = row.display_prefix.chars().count() + num_str.chars().count();
         let title_width = (area.width as usize).saturating_sub(prefix_chars);
-        let raw_title = if !is_inline {
-            if let (Mode::Edit, Some(es)) = (&app.mode, &app.edit) {
-                if es.task_id == row.id {
-                    let mut chars: Vec<char> = es.title.chars().collect();
-                    chars.insert(es.cursor_pos, '\u{2588}');
-                    chars.iter().collect()
-                } else {
-                    row.title.clone()
-                }
-            } else {
-                row.title.clone()
-            }
+        let raw_title = if is_editing {
+            let es = app.edit.as_ref().unwrap();
+            let mut chars: Vec<char> = es.title.chars().collect();
+            chars.insert(es.cursor_pos.min(chars.len()), '\u{2588}');
+            chars.into_iter().collect()
         } else {
             row.title.clone()
         };

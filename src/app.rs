@@ -42,9 +42,9 @@ pub enum ViewMode {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KanbanSort {
-    /// Oldest tasks first (by creation time).
+    /// Projects ordered by age of their oldest visible leaf task; within each project, DFS tree order.
     Age,
-    /// By project slot priority: slot 1 highest, slot 0 lowest, slot 9 second lowest.
+    /// Projects ordered by slot priority (1–9 then 0); within each project, DFS tree order.
     Project,
 }
 
@@ -185,6 +185,30 @@ impl App {
         self.clamp_all_cursors();
     }
 
+    /// Enter tree mode for the highest-priority enabled project (v in kanban).
+    /// Priority: slot 0 (key '1') highest … slot 9 (key '0') lowest.
+    pub fn enter_planning_by_priority(&mut self) {
+        let target_slot = (0..10usize)
+            .find(|&s| self.active_slots[s] && self.projects[s].is_some());
+
+        self.saved_slots = self.active_slots;
+        self.saved_show_unc = self.show_unc;
+
+        self.active_slots = [false; 10];
+        if let Some(slot) = target_slot {
+            self.active_slots[slot] = true;
+            self.show_unc = false;
+        } else {
+            self.show_unc = true;
+        }
+
+        self.view_mode = ViewMode::Tree;
+        self.cursor = [0, 0, 0];
+        self.focused_col = Column::Todo;
+        self.tui_scroll_offset = 0;
+        self.clamp_all_cursors();
+    }
+
     /// Exit planning (tree) mode, restoring the saved kanban filter state.
     pub fn exit_planning(&mut self) {
         self.active_slots = self.saved_slots;
@@ -284,22 +308,45 @@ impl App {
     }
 
     pub fn board_tasks_for(&self, col: Column) -> Vec<&Task> {
+        let dfs_pos: HashMap<Uuid, usize> = self.dfs_visible_ids()
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| (id, i))
+            .collect();
+
         let mut tasks: Vec<&Task> = self.visible_tasks_for(col)
             .into_iter()
             .filter(|t| t.children.is_empty())
             .collect();
-        match self.kanban_sort {
+
+        // Pre-compute per-project primary sort key to avoid borrow conflict inside sort closure.
+        let project_key: HashMap<String, u64> = match self.kanban_sort {
             KanbanSort::Age => {
-                tasks.sort_by_key(|t| t.created_at);
+                let mut map: HashMap<String, u64> = HashMap::new();
+                for t in &tasks {
+                    let age = t.created_at.timestamp_millis() as u64;
+                    map.entry(t.project.clone()).and_modify(|v| *v = (*v).min(age)).or_insert(age);
+                }
+                map
             }
             KanbanSort::Project => {
-                tasks.sort_by_key(|t| {
-                    self.slot_for_project(&t.project)
-                        .map(|s| if s == 9 { usize::MAX - 1 } else { s })
-                        .unwrap_or(usize::MAX)
-                });
+                tasks.iter()
+                    .map(|t| {
+                        let key = self.slot_for_project(&t.project)
+                            .map(|s| s as u64)
+                            .unwrap_or(u64::MAX);
+                        (t.project.clone(), key)
+                    })
+                    .collect()
             }
-        }
+        };
+
+        // Primary key: project ordering (by sort mode); secondary key: DFS tree position.
+        tasks.sort_by_key(|t| {
+            let pk = project_key.get(&t.project).copied().unwrap_or(u64::MAX);
+            let tree_key = dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX) as u64;
+            (pk, tree_key)
+        });
         tasks
     }
 

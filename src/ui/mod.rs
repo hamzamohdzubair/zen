@@ -83,7 +83,7 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
-    // Sort pill — only shown in action mode (kanban)
+    // Sort pill — only shown in kanban mode
     if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal) {
         let (sort_label, sort_color) = match app.kanban_sort {
             KanbanSort::Age     => (" AGE ", Color::Indexed(67)),

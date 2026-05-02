@@ -60,11 +60,14 @@ fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
-        // Cycle kanban sort order
+        // Cycle cross-project sort order
         KeyCode::Char('s') => app.cycle_sort(),
 
         // Enter planning mode for the selected task's project
         KeyCode::Enter => app.enter_planning_for_selected(),
+
+        // Enter tree mode for the highest-priority enabled project
+        KeyCode::Char('v') => app.enter_planning_by_priority(),
 
         _ => {}
     }
@@ -75,8 +78,8 @@ fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
 fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
         // Cycle through projects
-        KeyCode::Left => app.cycle_project(-1),
-        KeyCode::Right => app.cycle_project(1),
+        KeyCode::Left | KeyCode::Char(',') => app.cycle_project(-1),
+        KeyCode::Right | KeyCode::Char('.') => app.cycle_project(1),
 
         // Return to action mode (kanban)
         KeyCode::Char('v') => app.exit_planning(),
