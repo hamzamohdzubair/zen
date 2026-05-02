@@ -37,16 +37,16 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
             let slot = (c as u8 - b'1') as usize;
             match app.view_mode {
                 ViewMode::Tree => app.select_project_slot(slot),
-                ViewMode::Board => app.toggle_slot(slot),
+                ViewMode::Board => app.enter_planning_for_slot_key(slot),
             }
         }
         KeyCode::Char('0') => match app.view_mode {
             ViewMode::Tree => app.select_project_slot(9),
-            ViewMode::Board => app.toggle_slot(9),
+            ViewMode::Board => app.enter_planning_for_slot_key(9),
         },
         KeyCode::Char('`') => match app.view_mode {
             ViewMode::Tree => app.select_inbox(),
-            ViewMode::Board => app.toggle_inbox(),
+            ViewMode::Board => app.enter_planning_for_inbox_tree(),
         },
         KeyCode::Char('=') => app.enable_all(),
         KeyCode::Char('-') => app.disable_all(),
@@ -86,9 +86,6 @@ fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
-        // Toggle focus mode: show only first leaf per project vs all tasks
-        KeyCode::Char('f') => app.toggle_kanban_focus(),
-
         // Cycle cross-project sort order (Todo column only)
         KeyCode::Char('s') => app.cycle_sort(),
 
@@ -114,7 +111,7 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Enter => app.enter_kanban_for_selected(),
 
         // Return to action mode (kanban)
-        KeyCode::Tab => app.exit_planning(),
+        KeyCode::Tab | KeyCode::Backspace => app.exit_planning(),
 
         // Reorder within tree (sibling-aware)
         KeyCode::Char('K') => {

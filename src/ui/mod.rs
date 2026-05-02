@@ -81,22 +81,15 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
-    // Focus + sort pills — shown in kanban normal mode
-    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal) {
-        let (focus_label, focus_color) = if app.kanban_focus {
-            (" 1ST ", Color::Indexed(172))
-        } else {
-            (" ALL ", Color::Indexed(240))
+    // Sort indicator — shown in kanban normal mode when on Todo column
+    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal)
+        && app.focused_col == crate::app::Column::Todo
+    {
+        let (sort_label, sort_color) = match app.kanban_sort {
+            KanbanSort::Age     => (" AGE ", Color::Indexed(67)),
+            KanbanSort::Project => (" PRO ", Color::Indexed(64)),
         };
-        spans.push(Span::styled(focus_label, Style::default().fg(Color::Black).bg(focus_color)));
-
-        if app.focused_col == crate::app::Column::Todo {
-            let (sort_label, sort_color) = match app.kanban_sort {
-                KanbanSort::Age     => (" AGE ", Color::Indexed(67)),
-                KanbanSort::Project => (" PRO ", Color::Indexed(64)),
-            };
-            spans.push(Span::styled(sort_label, Style::default().fg(Color::Black).bg(sort_color)));
-        }
+        spans.push(Span::styled(sort_label, Style::default().fg(Color::Black).bg(sort_color)));
     }
 
     match &app.mode {
@@ -145,11 +138,10 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             };
             spans.push(Span::styled(label, style));
         }
-    } else {
-        // INBOX pill — always visible
+    } else if app.view_mode == ViewMode::Tree || matches!(app.mode, Mode::Move) {
+        // Project pills — shown in tree mode and move mode
         spans.push(inbox_pill_span(app.unc_doable_count(), app.show_unc));
 
-        // Show named project pills for non-empty slots
         for slot in 0..10 {
             if let Some(name) = &app.projects[slot] {
                 let key = slot_key_char(slot);

@@ -112,8 +112,6 @@ pub struct App {
     pub active_slots: [bool; 10],
     pub show_unc: bool,
     pub kanban_sort: KanbanSort,
-    /// When true, the Todo column shows only the first leaf task per project (default on).
-    pub kanban_focus: bool,
     /// Saved kanban filter state, restored when exiting planning mode.
     pub saved_slots: [bool; 10],
     pub saved_show_unc: bool,
@@ -128,8 +126,6 @@ pub struct App {
     pub project_edit: Option<ProjectEditState>,
     pub bulk_insert: Option<BulkInsertState>,
     pub status_message: Option<String>,
-    pub last_digit_press: Option<(usize, Instant)>,
-    pub last_unc_press: Option<Instant>,
     pub last_d_press: Option<Instant>,
     pub collapsed: HashSet<Uuid>,
     pub undo_stack: Vec<Vec<Task>>,
@@ -143,7 +139,6 @@ impl App {
             active_slots: [true; 10],
             show_unc: true,
             kanban_sort: KanbanSort::Age,
-            kanban_focus: true,
             saved_slots: [true; 10],
             saved_show_unc: true,
             mode: Mode::Normal,
@@ -157,8 +152,6 @@ impl App {
             project_edit: None,
             bulk_insert: None,
             status_message: None,
-            last_digit_press: None,
-            last_unc_press: None,
             last_d_press: None,
             collapsed: HashSet::new(),
             undo_stack: Vec::new(),
@@ -349,14 +342,13 @@ impl App {
     }
 
     pub fn board_tasks_for(&self, col: Column) -> Vec<&Task> {
-        let mut tasks: Vec<&Task> = self.visible_tasks_for(col)
+        let mut tasks: Vec<&Task> = self.all_col_tasks(col)
             .into_iter()
             .filter(|t| t.children.is_empty())
             .collect();
 
         match col {
             Column::Done => {
-                // Latest completed first — completion time is the last transition to Done.
                 tasks.sort_by(|a, b| {
                     let ta = a.transitions.iter().filter(|tr| tr.to == Status::Done).last().map(|tr| tr.at).unwrap_or(a.created_at);
                     let tb = b.transitions.iter().filter(|tr| tr.to == Status::Done).last().map(|tr| tr.at).unwrap_or(b.created_at);
@@ -364,15 +356,11 @@ impl App {
                 });
             }
             Column::Doing => {
-                // DFS tree position only — manually reorderable with J/K.
-                let dfs_pos: HashMap<Uuid, usize> = self.dfs_visible_ids()
-                    .into_iter().enumerate().map(|(i, id)| (id, i)).collect();
+                let dfs_pos = self.dfs_all_map();
                 tasks.sort_by_key(|t| dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX));
             }
             Column::Todo => {
-                // Primary: project ordering by kanban_sort mode; secondary: DFS tree position.
-                let dfs_pos: HashMap<Uuid, usize> = self.dfs_visible_ids()
-                    .into_iter().enumerate().map(|(i, id)| (id, i)).collect();
+                let dfs_pos = self.dfs_all_map();
                 let project_key: HashMap<String, u64> = match self.kanban_sort {
                     KanbanSort::Age => {
                         let mut map: HashMap<String, u64> = HashMap::new();
@@ -394,17 +382,123 @@ impl App {
                     let tree_key = dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX) as u64;
                     (pk, tree_key)
                 });
-                if self.kanban_focus {
-                    let mut seen = HashSet::new();
-                    tasks.retain(|t| seen.insert(t.project.clone()));
-                }
+                // Always show only first leaf per project; skip projects that already have a Doing task
+                let doing_projects: HashSet<&str> = self.tasks.iter()
+                    .filter(|t| t.status == Status::Doing && t.children.is_empty())
+                    .map(|t| t.project.as_str())
+                    .collect();
+                let mut seen: HashSet<String> = HashSet::new();
+                tasks.retain(|t| {
+                    !doing_projects.contains(t.project.as_str()) && seen.insert(t.project.clone())
+                });
             }
         }
         tasks
     }
 
-    pub fn toggle_kanban_focus(&mut self) {
-        self.kanban_focus = !self.kanban_focus;
+    /// Returns all tasks for a column in tree DFS order, ignoring project visibility filters.
+    fn all_col_tasks(&self, col: Column) -> Vec<&Task> {
+        let status = col.status();
+        let in_col: HashSet<Uuid> = self.tasks.iter()
+            .filter(|t| t.status == status)
+            .map(|t| t.id)
+            .collect();
+
+        let mut result: Vec<&Task> = Vec::new();
+        let mut added: HashSet<Uuid> = HashSet::new();
+
+        for task in &self.tasks {
+            if !in_col.contains(&task.id) || added.contains(&task.id) {
+                continue;
+            }
+            if let Some(pid) = task.parent_id {
+                if in_col.contains(&pid) {
+                    continue;
+                }
+            }
+            self.add_subtree(task.id, &in_col, &mut result, &mut added);
+        }
+
+        result
+    }
+
+    /// Returns DFS preorder position for every task, ignoring project visibility filters.
+    fn dfs_all_map(&self) -> HashMap<Uuid, usize> {
+        let tasks_by_id: HashMap<Uuid, &Task> = self.tasks.iter().map(|t| (t.id, t)).collect();
+        let mut result: Vec<Uuid> = Vec::new();
+
+        fn visit(id: Uuid, tasks_by_id: &HashMap<Uuid, &Task>, result: &mut Vec<Uuid>) {
+            result.push(id);
+            if let Some(task) = tasks_by_id.get(&id) {
+                for &cid in &task.children {
+                    if tasks_by_id.contains_key(&cid) {
+                        visit(cid, tasks_by_id, result);
+                    }
+                }
+            }
+        }
+
+        for task in &self.tasks {
+            if task.parent_id.is_none() {
+                visit(task.id, &tasks_by_id, &mut result);
+            }
+        }
+
+        result.into_iter().enumerate().map(|(i, id)| (id, i)).collect()
+    }
+
+    /// Enter tree view for the given project slot, with cursor on the first kanban-visible task.
+    pub fn enter_planning_for_slot_key(&mut self, slot: usize) {
+        let Some(project_name) = self.projects[slot].clone() else { return; };
+
+        let first_task_id = self.board_tasks_for(Column::Todo)
+            .into_iter()
+            .find(|t| t.project == project_name)
+            .map(|t| t.id);
+
+        self.saved_slots = self.active_slots;
+        self.saved_show_unc = self.show_unc;
+        self.active_slots = [false; 10];
+        self.active_slots[slot] = true;
+        self.show_unc = false;
+
+        self.view_mode = ViewMode::Tree;
+        self.focused_col = Column::Todo;
+        self.cursor = [0, 0, 0];
+        self.tui_scroll_offset = 0;
+
+        if let Some(task_id) = first_task_id {
+            if let Some(pos) = self.visible_tasks_for(Column::Todo).iter().position(|t| t.id == task_id) {
+                self.cursor[Self::col_index(Column::Todo)] = pos;
+            }
+        }
+
+        self.clamp_all_cursors();
+    }
+
+    /// Enter tree view for INBOX, with cursor on the first kanban-visible INBOX task.
+    pub fn enter_planning_for_inbox_tree(&mut self) {
+        let first_task_id = self.board_tasks_for(Column::Todo)
+            .into_iter()
+            .find(|t| self.is_unc(t))
+            .map(|t| t.id);
+
+        self.saved_slots = self.active_slots;
+        self.saved_show_unc = self.show_unc;
+        self.active_slots = [false; 10];
+        self.show_unc = true;
+
+        self.view_mode = ViewMode::Tree;
+        self.focused_col = Column::Todo;
+        self.cursor = [0, 0, 0];
+        self.tui_scroll_offset = 0;
+
+        if let Some(task_id) = first_task_id {
+            if let Some(pos) = self.visible_tasks_for(Column::Todo).iter().position(|t| t.id == task_id) {
+                self.cursor[Self::col_index(Column::Todo)] = pos;
+            }
+        }
+
         self.clamp_all_cursors();
     }
 
@@ -1226,45 +1320,6 @@ impl App {
         self.clamp_all_cursors();
     }
 
-    pub fn toggle_slot(&mut self, slot: usize) {
-        let now = Instant::now();
-        let is_double = self.last_digit_press
-            .map(|(s, t)| s == slot && now.duration_since(t).as_millis() < 500)
-            .unwrap_or(false);
-
-        if is_double {
-            for i in 0..10 {
-                self.active_slots[i] = i == slot;
-            }
-            self.show_unc = false;
-            self.last_digit_press = None;
-        } else {
-            self.active_slots[slot] = !self.active_slots[slot];
-            self.last_digit_press = Some((slot, now));
-        }
-        self.clamp_all_cursors();
-    }
-
-    /// In board mode: toggle INBOX visibility (double-tap to show exclusively).
-    pub fn toggle_inbox(&mut self) {
-        let now = Instant::now();
-        let is_double = self.last_unc_press
-            .map(|t| now.duration_since(t).as_millis() < 500)
-            .unwrap_or(false);
-
-        if is_double {
-            for i in 0..10 {
-                self.active_slots[i] = false;
-            }
-            self.show_unc = true;
-            self.last_unc_press = None;
-        } else {
-            self.show_unc = !self.show_unc;
-            self.last_unc_press = Some(now);
-        }
-        self.clamp_all_cursors();
-    }
-
     pub fn enable_all(&mut self) {
         self.active_slots = [true; 10];
         self.show_unc = true;
@@ -1868,17 +1923,7 @@ mod tests {
         assert!(app.task_ref(child_id).unwrap().parent_id.is_none());
     }
 
-    // ── toggle_slot / enable_all / disable_all ────────────────────────────────
-
-    #[test]
-    fn toggle_slot_flips_slot() {
-        let mut app = App::new(vec![], with_projects(&["work"]));
-        assert!(app.active_slots[0]);
-        app.toggle_slot(0);
-        assert!(!app.active_slots[0]);
-        app.toggle_slot(0);
-        assert!(app.active_slots[0]);
-    }
+    // ── enable_all / disable_all ────────────────────────────────────────────────
 
     #[test]
     fn enable_all_resets_everything() {

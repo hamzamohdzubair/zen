@@ -7,6 +7,16 @@ use ratatui::widgets::{Paragraph, Wrap};
 use crate::app::{App, Column, InsertPosition, InsertState, Mode};
 use crate::types::{Status, Task};
 
+fn task_key_char(app: &App, task: &Task) -> char {
+    if app.is_unc(task) {
+        '`'
+    } else if let Some(slot) = app.slot_for_project(&task.project) {
+        super::slot_key_char(slot)
+    } else {
+        '`'
+    }
+}
+
 pub fn draw_board(frame: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -120,14 +130,16 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                     None
                 };
 
+                let project_key = task_key_char(app, task);
+
                 let h = if inline_edit.is_some() {
                     1
                 } else {
                     let content = task.title.chars().count();
-                    wrap_height(0, content, inner.width)
+                    wrap_height(3, content, inner.width)
                 }.min(inner.y + inner.height - y);
 
-                draw_card(frame, task, selected, is_moving, inline_edit,
+                draw_card(frame, task, project_key, selected, is_moving, inline_edit,
                           Rect { x: inner.x, y, width: inner.width, height: h });
                 y += h;
             }
@@ -145,6 +157,7 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
 fn draw_card(
     frame: &mut Frame,
     task: &Task,
+    project_key: char,
     selected: bool,
     is_moving: bool,
     inline_edit: Option<&str>,
@@ -171,13 +184,16 @@ fn draw_card(
     };
     let bold = if active { Modifier::BOLD } else { Modifier::empty() };
 
-    let title_text = if let Some(input) = inline_edit {
-        format!("{}█", input)
+    let spans = if let Some(input) = inline_edit {
+        let text = format!("{}█", input);
+        vec![Span::styled(text, Style::default().fg(fg).bg(bg).add_modifier(bold))]
     } else {
-        task.title.clone()
+        let prefix = format!("{}: ", project_key);
+        vec![
+            Span::styled(prefix, Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)),
+            Span::styled(task.title.clone(), Style::default().fg(fg).bg(bg).add_modifier(bold)),
+        ]
     };
-
-    let spans = vec![Span::styled(title_text, Style::default().fg(fg).bg(bg).add_modifier(bold))];
 
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)).wrap(Wrap { trim: false }),
