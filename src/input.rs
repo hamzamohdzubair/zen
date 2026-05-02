@@ -91,6 +91,9 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Left | KeyCode::Char(',') => app.cycle_project(-1),
         KeyCode::Right | KeyCode::Char('.') => app.cycle_project(1),
 
+        // Return to action mode (kanban), positioning cursor on the selected task
+        KeyCode::Enter => app.enter_kanban_for_selected(),
+
         // Return to action mode (kanban)
         KeyCode::Char('v') => app.exit_planning(),
 

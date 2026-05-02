@@ -229,6 +229,31 @@ impl App {
         self.clamp_all_cursors();
     }
 
+    /// Enter kanban (board) mode for the currently selected task in tree view,
+    /// restoring saved filter state and placing the board cursor on that task.
+    pub fn enter_kanban_for_selected(&mut self) {
+        let task_info = self.selected_task_id(self.focused_col)
+            .and_then(|id| self.task_ref(id).map(|t| (id, t.status.clone())));
+
+        self.active_slots = self.saved_slots;
+        self.show_unc = self.saved_show_unc;
+        self.view_mode = ViewMode::Board;
+
+        if let Some((id, status)) = task_info {
+            let col = match status {
+                Status::Todo => Column::Todo,
+                Status::Doing => Column::Doing,
+                Status::Done => Column::Done,
+            };
+            self.focused_col = col;
+            if let Some(pos) = self.board_tasks_for(col).iter().position(|t| t.id == id) {
+                self.cursor[Self::col_index(col)] = pos;
+            }
+        }
+
+        self.clamp_all_cursors();
+    }
+
     /// Cycle the active project in planning mode (exclusive single-project selection).
     pub fn cycle_project(&mut self, delta: i32) {
         // Build ordered list: None = unc, Some(slot) = named project

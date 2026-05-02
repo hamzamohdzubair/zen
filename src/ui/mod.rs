@@ -105,11 +105,8 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             use crate::app::ConfirmAction;
             spans.push(Span::styled(SEP, sep_style));
             let label = match action {
-                ConfirmAction::DeleteTask(id) => {
-                    let title = app.task_ref(*id)
-                        .map(|t| t.title.as_str())
-                        .unwrap_or("task");
-                    format!(" delete \"{}\"?  Enter / Esc ", title)
+                ConfirmAction::DeleteTask(_) => {
+                    " delete?  Enter/Esc ".to_string()
                 }
             };
             spans.push(Span::styled(label, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
