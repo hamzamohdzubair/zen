@@ -162,10 +162,12 @@ impl App {
         }
     }
 
-    /// Enter planning (tree) mode for the project of the currently selected task.
+    /// Enter planning (tree) mode for the project of the currently selected task,
+    /// placing the tree cursor on that same task.
     pub fn enter_planning_for_selected(&mut self) {
         let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
-        let project = self.task_ref(task_id).map(|t| t.project.clone()).unwrap_or_default();
+        let Some((project, task_status)) = self.task_ref(task_id)
+            .map(|t| (t.project.clone(), t.status.clone())) else { return; };
 
         self.saved_slots = self.active_slots;
         self.saved_show_unc = self.show_unc;
@@ -180,8 +182,18 @@ impl App {
 
         self.view_mode = ViewMode::Tree;
         self.cursor = [0, 0, 0];
-        self.focused_col = Column::Todo;
         self.tui_scroll_offset = 0;
+
+        // Set focused_col and cursor to the task's actual column and position.
+        let col = match task_status {
+            Status::Todo => Column::Todo,
+            Status::Doing => Column::Doing,
+            Status::Done => Column::Done,
+        };
+        self.focused_col = col;
+        if let Some(pos) = self.visible_tasks_for(col).iter().position(|t| t.id == task_id) {
+            self.cursor[Self::col_index(col)] = pos;
+        }
         self.clamp_all_cursors();
     }
 
@@ -308,45 +320,53 @@ impl App {
     }
 
     pub fn board_tasks_for(&self, col: Column) -> Vec<&Task> {
-        let dfs_pos: HashMap<Uuid, usize> = self.dfs_visible_ids()
-            .into_iter()
-            .enumerate()
-            .map(|(i, id)| (id, i))
-            .collect();
-
         let mut tasks: Vec<&Task> = self.visible_tasks_for(col)
             .into_iter()
             .filter(|t| t.children.is_empty())
             .collect();
 
-        // Pre-compute per-project primary sort key to avoid borrow conflict inside sort closure.
-        let project_key: HashMap<String, u64> = match self.kanban_sort {
-            KanbanSort::Age => {
-                let mut map: HashMap<String, u64> = HashMap::new();
-                for t in &tasks {
-                    let age = t.created_at.timestamp_millis() as u64;
-                    map.entry(t.project.clone()).and_modify(|v| *v = (*v).min(age)).or_insert(age);
-                }
-                map
+        match col {
+            Column::Done => {
+                // Latest completed first — completion time is the last transition to Done.
+                tasks.sort_by(|a, b| {
+                    let ta = a.transitions.iter().filter(|tr| tr.to == Status::Done).last().map(|tr| tr.at).unwrap_or(a.created_at);
+                    let tb = b.transitions.iter().filter(|tr| tr.to == Status::Done).last().map(|tr| tr.at).unwrap_or(b.created_at);
+                    tb.cmp(&ta)
+                });
             }
-            KanbanSort::Project => {
-                tasks.iter()
-                    .map(|t| {
-                        let key = self.slot_for_project(&t.project)
-                            .map(|s| s as u64)
-                            .unwrap_or(u64::MAX);
-                        (t.project.clone(), key)
-                    })
-                    .collect()
+            Column::Doing => {
+                // DFS tree position only — manually reorderable with J/K.
+                let dfs_pos: HashMap<Uuid, usize> = self.dfs_visible_ids()
+                    .into_iter().enumerate().map(|(i, id)| (id, i)).collect();
+                tasks.sort_by_key(|t| dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX));
             }
-        };
-
-        // Primary key: project ordering (by sort mode); secondary key: DFS tree position.
-        tasks.sort_by_key(|t| {
-            let pk = project_key.get(&t.project).copied().unwrap_or(u64::MAX);
-            let tree_key = dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX) as u64;
-            (pk, tree_key)
-        });
+            Column::Todo => {
+                // Primary: project ordering by kanban_sort mode; secondary: DFS tree position.
+                let dfs_pos: HashMap<Uuid, usize> = self.dfs_visible_ids()
+                    .into_iter().enumerate().map(|(i, id)| (id, i)).collect();
+                let project_key: HashMap<String, u64> = match self.kanban_sort {
+                    KanbanSort::Age => {
+                        let mut map: HashMap<String, u64> = HashMap::new();
+                        for t in &tasks {
+                            let age = t.created_at.timestamp_millis() as u64;
+                            map.entry(t.project.clone()).and_modify(|v| *v = (*v).min(age)).or_insert(age);
+                        }
+                        map
+                    }
+                    KanbanSort::Project => tasks.iter()
+                        .map(|t| {
+                            let key = self.slot_for_project(&t.project).map(|s| s as u64).unwrap_or(u64::MAX);
+                            (t.project.clone(), key)
+                        })
+                        .collect(),
+                };
+                tasks.sort_by_key(|t| {
+                    let pk = project_key.get(&t.project).copied().unwrap_or(u64::MAX);
+                    let tree_key = dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX) as u64;
+                    (pk, tree_key)
+                });
+            }
+        }
         tasks
     }
 
@@ -356,6 +376,78 @@ impl App {
             KanbanSort::Project => KanbanSort::Age,
         };
         self.clamp_all_cursors();
+    }
+
+    /// Swap two tasks' positions in the DFS tree (both must be leaves).
+    fn swap_dfs_positions(&mut self, id_a: Uuid, id_b: Uuid) {
+        if id_a == id_b { return; }
+        let parent_a = self.task_ref(id_a).and_then(|t| t.parent_id);
+        let parent_b = self.task_ref(id_b).and_then(|t| t.parent_id);
+
+        match (parent_a, parent_b) {
+            (Some(pid_a), Some(pid_b)) if pid_a == pid_b => {
+                // Same parent: swap positions in children array.
+                let pos_a = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_a)).unwrap();
+                let pos_b = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_b)).unwrap();
+                self.task_mut(pid_a).unwrap().children.swap(pos_a, pos_b);
+            }
+            (None, None) => {
+                // Both roots: swap positions in self.tasks.
+                let idx_a = self.tasks.iter().position(|t| t.id == id_a).unwrap();
+                let idx_b = self.tasks.iter().position(|t| t.id == id_b).unwrap();
+                self.tasks.swap(idx_a, idx_b);
+            }
+            (Some(pid_a), Some(pid_b)) => {
+                // Different non-root parents: swap children entries and update parent_ids.
+                let pos_a = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_a)).unwrap();
+                let pos_b = self.task_ref(pid_b).and_then(|p| p.children.iter().position(|&c| c == id_b)).unwrap();
+                self.task_mut(pid_a).unwrap().children[pos_a] = id_b;
+                self.task_mut(pid_b).unwrap().children[pos_b] = id_a;
+                self.task_mut(id_a).unwrap().parent_id = Some(pid_b);
+                self.task_mut(id_b).unwrap().parent_id = Some(pid_a);
+            }
+            (None, Some(pid_b)) => {
+                // id_a is root, id_b is non-root.
+                let pos_b = self.task_ref(pid_b).and_then(|p| p.children.iter().position(|&c| c == id_b)).unwrap();
+                self.task_mut(pid_b).unwrap().children[pos_b] = id_a;
+                self.task_mut(id_a).unwrap().parent_id = Some(pid_b);
+                self.task_mut(id_b).unwrap().parent_id = None;
+                let idx_a = self.tasks.iter().position(|t| t.id == id_a).unwrap();
+                let idx_b = self.tasks.iter().position(|t| t.id == id_b).unwrap();
+                self.tasks.swap(idx_a, idx_b);
+            }
+            (Some(pid_a), None) => {
+                // id_b is root, id_a is non-root.
+                let pos_a = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_a)).unwrap();
+                self.task_mut(pid_a).unwrap().children[pos_a] = id_b;
+                self.task_mut(id_b).unwrap().parent_id = Some(pid_a);
+                self.task_mut(id_a).unwrap().parent_id = None;
+                let idx_a = self.tasks.iter().position(|t| t.id == id_a).unwrap();
+                let idx_b = self.tasks.iter().position(|t| t.id == id_b).unwrap();
+                self.tasks.swap(idx_a, idx_b);
+            }
+        }
+    }
+
+    /// Move the selected Doing task up (delta=-1) or down (delta=1) in the Doing column.
+    pub fn kanban_doing_swap(&mut self, delta: i32) {
+        let col = Column::Doing;
+        let cur = self.cursor[Self::col_index(col)];
+        let tasks = self.board_tasks_for(col);
+        let len = tasks.len();
+        if len == 0 { return; }
+        let other = if delta < 0 {
+            if cur == 0 { return; }
+            cur - 1
+        } else {
+            if cur + 1 >= len { return; }
+            cur + 1
+        };
+        let id_a = tasks[cur].id;
+        let id_b = tasks[other].id;
+        drop(tasks);
+        self.swap_dfs_positions(id_a, id_b);
+        self.cursor[Self::col_index(col)] = other;
     }
 
     fn nav_tasks_for(&self, col: Column) -> Vec<&Task> {
@@ -492,20 +584,22 @@ impl App {
             task.transition_to(new_status.clone());
         }
         if let Some(pid) = parent_id {
-            if self.task_ref(pid).map(|t| t.status == src_status).unwrap_or(false) {
-                let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
-                let sibling_remains = children.iter().any(|&cid| {
-                    self.task_ref(cid).map(|c| c.status == src_status).unwrap_or(false)
-                });
-                if !sibling_remains {
-                    if let Some(parent) = self.task_mut(pid) {
-                        parent.transition_to(new_status.clone());
-                    }
+            let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
+            let derived = if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Todo).unwrap_or(false)) {
+                Status::Todo
+            } else if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Doing).unwrap_or(false)) {
+                Status::Doing
+            } else {
+                Status::Done
+            };
+            if self.task_ref(pid).map(|t| t.status != derived).unwrap_or(false) {
+                if let Some(parent) = self.task_mut(pid) {
+                    parent.transition_to(derived);
                 }
             }
         }
         self.clamp_cursor(col);
-        if let Some(pos) = self.visible_tasks_for(dest).iter().position(|t| t.id == id) {
+        if let Some(pos) = self.nav_tasks_for(dest).iter().position(|t| t.id == id) {
             self.cursor[Self::col_index(dest)] = pos;
         }
         self.focused_col = dest;
@@ -1498,6 +1592,40 @@ mod tests {
         app.focused_col = Column::Done;
         app.move_selected_right();
         assert_eq!(app.task_ref(id).unwrap().status, Status::Done);
+    }
+
+    #[test]
+    fn parent_demotes_when_child_returns_from_done_with_done_sibling() {
+        // Regression: if a parent was promoted to Done after its last Doing child
+        // moved to Done, and that child is moved back while a Done sibling exists,
+        // the parent must demote to reflect the child's new status.
+        let mut parent = task("parent", "", Status::Todo);
+        let mut c1 = task("c1", "", Status::Todo);
+        let mut c2 = task("c2", "", Status::Done); // already Done before parent promoted
+        let pid = parent.id;
+        let c1_id = c1.id;
+        let c2_id = c2.id;
+        c1.parent_id = Some(pid);
+        c2.parent_id = Some(pid);
+        parent.children = vec![c1_id, c2_id];
+        let mut app = App::new(vec![parent, c1, c2], no_projects());
+        // Use Board view so only leaf tasks appear in each column (mirrors kanban).
+        app.view_mode = ViewMode::Board;
+
+        // Move c1 to Done (Todo → Doing → Done), which auto-promotes parent to Done.
+        app.focused_col = Column::Todo;
+        app.move_selected_right(); // c1: Todo → Doing, parent follows
+        app.focused_col = Column::Doing;
+        app.move_selected_right(); // c1: Doing → Done, parent follows → Done
+        assert_eq!(app.task_ref(pid).unwrap().status, Status::Done);
+
+        // Move c1 back to Doing — parent must demote even though c2 is still Done.
+        app.focused_col = Column::Done;
+        app.move_selected_left(); // c1: Done → Doing
+        assert_eq!(app.task_ref(c1_id).unwrap().status, Status::Doing);
+        assert_eq!(app.task_ref(c2_id).unwrap().status, Status::Done);
+        assert_eq!(app.task_ref(pid).unwrap().status, Status::Doing,
+            "parent should be Doing when c1 is Doing even though c2 is Done");
     }
 
     // ── make_child / make_root ────────────────────────────────────────────────

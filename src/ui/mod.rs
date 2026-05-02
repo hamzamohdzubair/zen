@@ -83,8 +83,9 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
-    // Sort pill — only shown in kanban mode
-    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal) {
+    // Sort pill — shown in kanban mode only when Todo column is focused
+    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal)
+        && app.focused_col == crate::app::Column::Todo {
         let (sort_label, sort_color) = match app.kanban_sort {
             KanbanSort::Age     => (" AGE ", Color::Indexed(67)),
             KanbanSort::Project => (" PRO ", Color::Indexed(64)),

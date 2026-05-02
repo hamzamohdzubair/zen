@@ -251,7 +251,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let is_editing = app.mode == Mode::Edit
             && app.edit.as_ref().map(|es| es.task_id == row.id).unwrap_or(false);
         let bg = if is_editing {
-            Some(Color::Rgb(30, 75, 45))
+            Some(Color::Indexed(22))
         } else if is_selected {
             Some(Color::Indexed(238))
         } else {

@@ -60,7 +60,17 @@ fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
-        // Cycle cross-project sort order
+        // Reorder within Doing column (only Doing — Done is immutable, Todo uses sort mode)
+        KeyCode::Char('K') if app.focused_col == Column::Doing => {
+            app.kanban_doing_swap(-1);
+            return AppAction::Save;
+        }
+        KeyCode::Char('J') if app.focused_col == Column::Doing => {
+            app.kanban_doing_swap(1);
+            return AppAction::Save;
+        }
+
+        // Cycle cross-project sort order (Todo column only)
         KeyCode::Char('s') => app.cycle_sort(),
 
         // Enter planning mode for the selected task's project
