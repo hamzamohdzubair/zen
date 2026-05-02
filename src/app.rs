@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -38,6 +38,14 @@ pub enum ConfirmAction {
 pub enum ViewMode {
     Tree,
     Board,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum KanbanSort {
+    /// Oldest tasks first (by creation time).
+    Age,
+    /// By project slot priority: slot 1 highest, slot 0 lowest, slot 9 second lowest.
+    Project,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -91,7 +99,7 @@ pub struct InsertState {
 pub struct EditState {
     pub task_id: Uuid,
     pub title: String,
-    pub description: String,
+    pub cursor_pos: usize,
 }
 
 pub struct MoveState {
@@ -109,6 +117,10 @@ pub struct App {
     pub projects: [Option<String>; 10],
     pub active_slots: [bool; 10],
     pub show_unc: bool,
+    pub kanban_sort: KanbanSort,
+    /// Saved kanban filter state, restored when exiting planning mode.
+    pub saved_slots: [bool; 10],
+    pub saved_show_unc: bool,
     pub mode: Mode,
     pub view_mode: ViewMode,
     pub focused_col: Column,
@@ -131,6 +143,9 @@ impl App {
             projects,
             active_slots: [true; 10],
             show_unc: true,
+            kanban_sort: KanbanSort::Age,
+            saved_slots: [true; 10],
+            saved_show_unc: true,
             mode: Mode::Normal,
             view_mode: ViewMode::Tree,
             focused_col: Column::Todo,
@@ -147,11 +162,70 @@ impl App {
         }
     }
 
-    pub fn toggle_view(&mut self) {
-        self.view_mode = match self.view_mode {
-            ViewMode::Tree => ViewMode::Board,
-            ViewMode::Board => ViewMode::Tree,
+    /// Enter planning (tree) mode for the project of the currently selected task.
+    pub fn enter_planning_for_selected(&mut self) {
+        let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
+        let project = self.task_ref(task_id).map(|t| t.project.clone()).unwrap_or_default();
+
+        self.saved_slots = self.active_slots;
+        self.saved_show_unc = self.show_unc;
+
+        self.active_slots = [false; 10];
+        if let Some(slot) = self.slot_for_project(&project) {
+            self.active_slots[slot] = true;
+            self.show_unc = false;
+        } else {
+            self.show_unc = true;
+        }
+
+        self.view_mode = ViewMode::Tree;
+        self.cursor = [0, 0, 0];
+        self.focused_col = Column::Todo;
+        self.tui_scroll_offset = 0;
+        self.clamp_all_cursors();
+    }
+
+    /// Exit planning (tree) mode, restoring the saved kanban filter state.
+    pub fn exit_planning(&mut self) {
+        self.active_slots = self.saved_slots;
+        self.show_unc = self.saved_show_unc;
+        self.view_mode = ViewMode::Board;
+        self.clamp_all_cursors();
+    }
+
+    /// Cycle the active project in planning mode (exclusive single-project selection).
+    pub fn cycle_project(&mut self, delta: i32) {
+        // Build ordered list: None = unc, Some(slot) = named project
+        let mut items: Vec<Option<usize>> = Vec::new();
+        if self.has_unc_tasks() {
+            items.push(None);
+        }
+        for slot in 0..10usize {
+            if self.projects[slot].is_some() {
+                items.push(Some(slot));
+            }
+        }
+        if items.is_empty() { return; }
+
+        let current = if self.show_unc && self.active_slots.iter().all(|&a| !a) {
+            items.iter().position(|i| i.is_none()).unwrap_or(0)
+        } else if let Some(slot) = self.active_slots.iter().position(|&a| a) {
+            items.iter().position(|i| *i == Some(slot)).unwrap_or(0)
+        } else {
+            0
         };
+
+        let new_pos = (current as i32 + delta).rem_euclid(items.len() as i32) as usize;
+
+        self.active_slots = [false; 10];
+        match items[new_pos] {
+            None => { self.show_unc = true; }
+            Some(slot) => { self.show_unc = false; self.active_slots[slot] = true; }
+        }
+        self.cursor = [0, 0, 0];
+        self.focused_col = Column::Todo;
+        self.tui_scroll_offset = 0;
+        self.clamp_all_cursors();
     }
 
     pub fn col_index(col: Column) -> usize {
@@ -209,6 +283,41 @@ impl App {
         self.tasks.iter().any(|t| self.is_unc(t))
     }
 
+    pub fn board_tasks_for(&self, col: Column) -> Vec<&Task> {
+        let mut tasks: Vec<&Task> = self.visible_tasks_for(col)
+            .into_iter()
+            .filter(|t| t.children.is_empty())
+            .collect();
+        match self.kanban_sort {
+            KanbanSort::Age => {
+                tasks.sort_by_key(|t| t.created_at);
+            }
+            KanbanSort::Project => {
+                tasks.sort_by_key(|t| {
+                    self.slot_for_project(&t.project)
+                        .map(|s| if s == 9 { usize::MAX - 1 } else { s })
+                        .unwrap_or(usize::MAX)
+                });
+            }
+        }
+        tasks
+    }
+
+    pub fn cycle_sort(&mut self) {
+        self.kanban_sort = match self.kanban_sort {
+            KanbanSort::Age => KanbanSort::Project,
+            KanbanSort::Project => KanbanSort::Age,
+        };
+        self.clamp_all_cursors();
+    }
+
+    fn nav_tasks_for(&self, col: Column) -> Vec<&Task> {
+        match self.view_mode {
+            ViewMode::Board => self.board_tasks_for(col),
+            ViewMode::Tree => self.visible_tasks_for(col),
+        }
+    }
+
     pub fn visible_tasks_for(&self, col: Column) -> Vec<&Task> {
         let status = col.status();
         let in_col: HashSet<Uuid> = self.tasks.iter()
@@ -258,7 +367,7 @@ impl App {
     }
 
     pub fn clamp_cursor(&mut self, col: Column) {
-        let len = self.visible_tasks_for(col).len();
+        let len = self.nav_tasks_for(col).len();
         let i = Self::col_index(col);
         if len == 0 {
             self.cursor[i] = 0;
@@ -274,7 +383,7 @@ impl App {
     }
 
     pub fn selected_task_id(&self, col: Column) -> Option<Uuid> {
-        let tasks = self.visible_tasks_for(col);
+        let tasks = self.nav_tasks_for(col);
         let cur = self.cursor_for(col);
         tasks.get(cur).map(|t| t.id)
     }
@@ -298,7 +407,7 @@ impl App {
 
     pub fn move_cursor_down(&mut self) {
         let col = self.focused_col;
-        let len = self.visible_tasks_for(col).len();
+        let len = self.nav_tasks_for(col).len();
         let i = Self::col_index(col);
         if self.cursor[i] + 1 < len {
             self.cursor[i] += 1;
@@ -316,149 +425,219 @@ impl App {
     // ── Task movement ────────────────────────────────────────────────────────
 
     pub fn move_selected_right(&mut self) {
-        let col = self.focused_col;
-        let dest = col.next();
-        if let Some(id) = self.selected_task_id(col) {
-            let parent_id = self.task_ref(id).and_then(|t| t.parent_id);
-            let new_status = dest.status();
-            let src_status = col.status();
-            if let Some(task) = self.task_mut(id) {
-                if task.status != new_status {
-                    task.transition_to(new_status.clone());
-                }
-            }
-            if let Some(pid) = parent_id {
-                if self.task_ref(pid).map(|t| t.status == src_status).unwrap_or(false) {
-                    let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
-                    let remaining = children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == src_status).unwrap_or(false));
-                    if !remaining {
-                        if let Some(parent) = self.task_mut(pid) {
-                            parent.transition_to(new_status.clone());
-                        }
-                    }
-                }
-            }
-            self.clamp_cursor(col);
-            if let Some(pos) = self.visible_tasks_for(dest).iter().position(|t| t.id == id) {
-                self.cursor[Self::col_index(dest)] = pos;
-            }
-            self.focused_col = dest;
-        }
+        let dest = self.focused_col.next();
+        self.move_selected_to(dest);
     }
 
     pub fn move_selected_left(&mut self) {
+        let dest = self.focused_col.prev();
+        self.move_selected_to(dest);
+    }
+
+    fn move_selected_to(&mut self, dest: Column) {
         let col = self.focused_col;
-        let dest = col.prev();
-        if let Some(id) = self.selected_task_id(col) {
-            let parent_id = self.task_ref(id).and_then(|t| t.parent_id);
-            let new_status = dest.status();
-            let src_status = col.status();
-            if let Some(task) = self.task_mut(id) {
-                if task.status != new_status {
-                    task.transition_to(new_status.clone());
-                }
-            }
-            if let Some(pid) = parent_id {
-                if self.task_ref(pid).map(|t| t.status == src_status).unwrap_or(false) {
-                    let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
-                    let remaining = children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == src_status).unwrap_or(false));
-                    if !remaining {
-                        if let Some(parent) = self.task_mut(pid) {
-                            parent.transition_to(new_status.clone());
-                        }
+        if dest == col { return; }
+        let Some(id) = self.selected_task_id(col) else { return; };
+        let parent_id = self.task_ref(id).and_then(|t| t.parent_id);
+        let src_status = col.status();
+        let new_status = dest.status();
+        if let Some(task) = self.task_mut(id) {
+            task.transition_to(new_status.clone());
+        }
+        if let Some(pid) = parent_id {
+            if self.task_ref(pid).map(|t| t.status == src_status).unwrap_or(false) {
+                let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
+                let sibling_remains = children.iter().any(|&cid| {
+                    self.task_ref(cid).map(|c| c.status == src_status).unwrap_or(false)
+                });
+                if !sibling_remains {
+                    if let Some(parent) = self.task_mut(pid) {
+                        parent.transition_to(new_status.clone());
                     }
                 }
             }
-            self.clamp_cursor(col);
-            if let Some(pos) = self.visible_tasks_for(dest).iter().position(|t| t.id == id) {
-                self.cursor[Self::col_index(dest)] = pos;
-            }
-            self.focused_col = dest;
         }
+        self.clamp_cursor(col);
+        if let Some(pos) = self.visible_tasks_for(dest).iter().position(|t| t.id == id) {
+            self.cursor[Self::col_index(dest)] = pos;
+        }
+        self.focused_col = dest;
     }
 
-    pub fn swap_up(&mut self) {
-        let col = self.focused_col;
-        let visible: Vec<Uuid> = self.visible_tasks_for(col).iter().map(|t| t.id).collect();
-        let cur = self.cursor_for(col);
-        if cur == 0 || visible.is_empty() {
-            return;
-        }
-        let a = visible[cur];
-        let group_start = self.group_start(&visible, cur - 1);
-        let first = visible[group_start];
-        let ai = self.tasks.iter().position(|t| t.id == a).unwrap();
-        let bi = self.tasks.iter().position(|t| t.id == first).unwrap();
-        if bi < ai {
-            self.tasks[bi..=ai].rotate_right(1);
-        }
-        self.cursor[Self::col_index(col)] = group_start;
-    }
+    /// Returns all visible task IDs in DFS preorder (same order as the tree display).
+    fn dfs_visible_ids(&self) -> Vec<Uuid> {
+        let visible_ids: HashSet<Uuid> = self.tasks.iter()
+            .filter(|t| self.task_visible(t))
+            .map(|t| t.id)
+            .collect();
 
-    pub fn swap_down(&mut self) {
-        let col = self.focused_col;
-        let visible: Vec<Uuid> = self.visible_tasks_for(col).iter().map(|t| t.id).collect();
-        let cur = self.cursor_for(col);
-        if cur + 1 >= visible.len() {
-            return;
-        }
-        let a = visible[cur];
-        let group_end = self.group_end(&visible, cur + 1);
-        let last = visible[group_end];
-        let ai = self.tasks.iter().position(|t| t.id == a).unwrap();
-        let bi = self.tasks.iter().position(|t| t.id == last).unwrap();
-        if ai < bi {
-            self.tasks[ai..=bi].rotate_left(1);
-        }
-        self.cursor[Self::col_index(col)] = group_end;
-    }
+        let tasks_by_id: HashMap<Uuid, &Task> = self.tasks.iter()
+            .map(|t| (t.id, t))
+            .collect();
 
-    fn group_end(&self, visible: &[Uuid], start: usize) -> usize {
-        let id = visible[start];
-        let task = match self.task_ref(id) {
-            Some(t) => t,
-            None => return start,
-        };
-
-        if let Some(pid) = task.parent_id {
-            if !visible.contains(&pid) {
-                let mut end = start;
-                while end + 1 < visible.len() {
-                    let next_pid = self.task_ref(visible[end + 1]).and_then(|t| t.parent_id);
-                    if next_pid == Some(pid) { end += 1; } else { break; }
+        fn visit(id: Uuid, tasks_by_id: &HashMap<Uuid, &Task>, visible_ids: &HashSet<Uuid>, result: &mut Vec<Uuid>) {
+            result.push(id);
+            if let Some(task) = tasks_by_id.get(&id) {
+                for &cid in &task.children {
+                    if visible_ids.contains(&cid) {
+                        visit(cid, tasks_by_id, visible_ids, result);
+                    }
                 }
-                return end;
             }
         }
 
-        let mut end = start;
-        while end + 1 < visible.len() {
-            let next_pid = self.task_ref(visible[end + 1]).and_then(|t| t.parent_id);
-            if next_pid == Some(id) { end += 1; } else { break; }
+        let mut result = Vec::new();
+        for task in &self.tasks {
+            if !visible_ids.contains(&task.id) { continue; }
+            if task.parent_id.map(|pid| !visible_ids.contains(&pid)).unwrap_or(true) {
+                visit(task.id, &tasks_by_id, &visible_ids, &mut result);
+            }
         }
-        end
+        result
     }
 
-    fn group_start(&self, visible: &[Uuid], end: usize) -> usize {
-        let id = visible[end];
-        let task = match self.task_ref(id) {
-            Some(t) => t,
-            None => return end,
-        };
+    fn is_descendant_of(&self, id: Uuid, ancestor_id: Uuid) -> bool {
+        let mut current = id;
+        loop {
+            match self.task_ref(current).and_then(|t| t.parent_id) {
+                None => return false,
+                Some(pid) if pid == ancestor_id => return true,
+                Some(pid) => current = pid,
+            }
+        }
+    }
 
-        if let Some(pid) = task.parent_id {
-            if let Some(parent_vis) = visible.iter().position(|&v| v == pid) {
-                return parent_vis;
+    /// Move selected task one visual row up in the DFS tree, reparenting if needed.
+    pub fn tree_swap_up(&mut self) {
+        let dfs = self.dfs_visible_ids();
+        let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
+        let i = match dfs.iter().position(|&id| id == task_id) {
+            Some(p) => p,
+            None => return,
+        };
+        if i == 0 { return; }
+
+        let prev_id = dfs[i - 1];
+        let task_parent = self.task_ref(task_id).and_then(|t| t.parent_id);
+        // prev is task's parent: don't promote via K (use < for that)
+        if task_parent == Some(prev_id) { return; }
+
+        let prev_parent = self.task_ref(prev_id).and_then(|t| t.parent_id);
+
+        if task_parent == prev_parent {
+            // Same parent: simple sibling swap
+            if let Some(pid) = task_parent {
+                if let Some(parent) = self.task_mut(pid) {
+                    let pos = parent.children.iter().position(|&c| c == task_id).unwrap();
+                    parent.children.swap(pos, pos - 1);
+                }
+            } else {
+                let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
+                let prev_idx = self.tasks.iter().position(|t| t.id == prev_id).unwrap();
+                self.tasks.swap(cur_idx, prev_idx);
             }
-            let mut start = end;
-            while start > 0 {
-                let prev_pid = self.task_ref(visible[start - 1]).and_then(|t| t.parent_id);
-                if prev_pid == Some(pid) { start -= 1; } else { break; }
+        } else {
+            // Reparent: task becomes sibling of prev, inserted before prev
+            if let Some(old_pid) = task_parent {
+                if let Some(old_p) = self.task_mut(old_pid) {
+                    old_p.children.retain(|&c| c != task_id);
+                }
             }
-            return start;
+            if let Some(task) = self.task_mut(task_id) {
+                task.parent_id = prev_parent;
+            }
+            match prev_parent {
+                Some(new_pid) => {
+                    let pos = self.task_ref(new_pid)
+                        .and_then(|p| p.children.iter().position(|&c| c == prev_id))
+                        .unwrap_or(0);
+                    if let Some(new_p) = self.task_mut(new_pid) {
+                        new_p.children.insert(pos, task_id);
+                    }
+                }
+                None => {
+                    let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
+                    let prev_idx = self.tasks.iter().position(|t| t.id == prev_id).unwrap();
+                    let task_obj = self.tasks.remove(cur_idx);
+                    let insert_idx = if cur_idx < prev_idx { prev_idx - 1 } else { prev_idx };
+                    self.tasks.insert(insert_idx, task_obj);
+                }
+            }
         }
 
-        end
+        let col = self.focused_col;
+        let visible = self.visible_tasks_for(col);
+        if let Some(pos) = visible.iter().position(|t| t.id == task_id) {
+            self.cursor[Self::col_index(col)] = pos;
+        }
+    }
+
+    /// Move selected task one visual row down in the DFS tree (past its full subtree), reparenting if needed.
+    pub fn tree_swap_down(&mut self) {
+        let dfs = self.dfs_visible_ids();
+        let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
+        let i = match dfs.iter().position(|&id| id == task_id) {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Find first DFS row after task's full subtree
+        let mut subtree_end = i + 1;
+        while subtree_end < dfs.len() && self.is_descendant_of(dfs[subtree_end], task_id) {
+            subtree_end += 1;
+        }
+        if subtree_end >= dfs.len() { return; }
+
+        let next_id = dfs[subtree_end];
+        let task_parent = self.task_ref(task_id).and_then(|t| t.parent_id);
+        let next_parent = self.task_ref(next_id).and_then(|t| t.parent_id);
+
+        if task_parent == next_parent {
+            // Same parent: simple sibling swap
+            if let Some(pid) = task_parent {
+                if let Some(parent) = self.task_mut(pid) {
+                    let pos = parent.children.iter().position(|&c| c == task_id).unwrap();
+                    parent.children.swap(pos, pos + 1);
+                }
+            } else {
+                let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
+                let next_idx = self.tasks.iter().position(|t| t.id == next_id).unwrap();
+                self.tasks.swap(cur_idx, next_idx);
+            }
+        } else {
+            // Reparent: task becomes sibling of next, inserted after next
+            if let Some(old_pid) = task_parent {
+                if let Some(old_p) = self.task_mut(old_pid) {
+                    old_p.children.retain(|&c| c != task_id);
+                }
+            }
+            if let Some(task) = self.task_mut(task_id) {
+                task.parent_id = next_parent;
+            }
+            match next_parent {
+                Some(new_pid) => {
+                    let pos = self.task_ref(new_pid)
+                        .and_then(|p| p.children.iter().position(|&c| c == next_id))
+                        .unwrap_or(0);
+                    if let Some(new_p) = self.task_mut(new_pid) {
+                        new_p.children.insert(pos + 1, task_id);
+                    }
+                }
+                None => {
+                    let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
+                    let next_idx = self.tasks.iter().position(|t| t.id == next_id).unwrap();
+                    let task_obj = self.tasks.remove(cur_idx);
+                    let insert_idx = if cur_idx < next_idx { next_idx } else { next_idx + 1 };
+                    self.tasks.insert(insert_idx, task_obj);
+                }
+            }
+        }
+
+        let col = self.focused_col;
+        let visible = self.visible_tasks_for(col);
+        if let Some(pos) = visible.iter().position(|t| t.id == task_id) {
+            self.cursor[Self::col_index(col)] = pos;
+        }
     }
 
     // ── Parent/child ─────────────────────────────────────────────────────────
@@ -485,7 +664,7 @@ impl App {
 
     pub fn make_child(&mut self) {
         let col = self.focused_col;
-        let visible: Vec<Uuid> = self.visible_tasks_for(col).iter().map(|t| t.id).collect();
+        let visible: Vec<Uuid> = self.nav_tasks_for(col).iter().map(|t| t.id).collect();
         let cur = self.cursor_for(col);
         if cur == 0 || visible.is_empty() {
             return;
@@ -780,14 +959,15 @@ impl App {
 
     // ── Edit ─────────────────────────────────────────────────────────────────
 
-    pub fn begin_edit(&mut self) {
+    pub fn begin_edit(&mut self, cursor_at_end: bool) {
         let col = self.focused_col;
         if let Some(id) = self.selected_task_id(col) {
             if let Some(task) = self.task_ref(id) {
+                let cursor_pos = if cursor_at_end { task.title.chars().count() } else { 0 };
                 self.edit = Some(EditState {
                     task_id: id,
                     title: task.title.clone(),
-                    description: task.description.clone().unwrap_or_default(),
+                    cursor_pos,
                 });
                 self.mode = Mode::Edit;
             }
@@ -798,11 +978,6 @@ impl App {
         if let Some(state) = self.edit.take() {
             if let Some(task) = self.task_mut(state.task_id) {
                 task.title = state.title.trim().to_string();
-                task.description = if state.description.is_empty() {
-                    None
-                } else {
-                    Some(state.description)
-                };
             }
         }
         self.mode = Mode::Normal;
@@ -987,17 +1162,6 @@ impl App {
         self.status_message = Some(format!("Created {} tasks", state.num));
     }
 
-    pub fn undone_leaf_count(&self, id: Uuid) -> usize {
-        let task = match self.task_ref(id) {
-            Some(t) => t,
-            None => return 0,
-        };
-        if task.children.is_empty() {
-            (task.status != Status::Done) as usize
-        } else {
-            task.children.clone().iter().map(|&cid| self.undone_leaf_count(cid)).sum()
-        }
-    }
 
     fn root_task_id(&self, id: Uuid) -> Uuid {
         let mut current = id;
@@ -1521,36 +1685,6 @@ mod tests {
         assert!(!app.has_unc_tasks());
         app.tasks.push(task("x", "", Status::Todo));
         assert!(app.has_unc_tasks());
-    }
-
-    #[test]
-    fn undone_leaf_count_sums_non_done_leaves() {
-        let mut root = task("root", "", Status::Todo);
-        let mut child_a = task("child_a", "", Status::Todo);
-        let mut child_b = task("child_b", "", Status::Doing);
-        let mut child_c = task("child_c", "", Status::Done);
-        let root_id = root.id;
-        let a_id = child_a.id;
-        let b_id = child_b.id;
-        let c_id = child_c.id;
-        child_a.parent_id = Some(root_id);
-        child_b.parent_id = Some(root_id);
-        child_c.parent_id = Some(root_id);
-        root.children.extend([a_id, b_id, c_id]);
-        let app = App::new(vec![root, child_a, child_b, child_c], no_projects());
-        // child_a (todo) + child_b (doing) = 2 undone leaves; child_c (done) excluded
-        assert_eq!(app.undone_leaf_count(root_id), 2);
-    }
-
-    #[test]
-    fn undone_leaf_count_is_none_for_leaf_task() {
-        let leaf = task("leaf", "", Status::Todo);
-        let leaf_id = leaf.id;
-        let app = App::new(vec![leaf], no_projects());
-        // Leaf tasks return 1 from the recursive helper (they count themselves),
-        // but draw_card only calls undone_leaf_count when children is non-empty.
-        // The value when called on a plain leaf is 1 (itself, undone).
-        assert_eq!(app.undone_leaf_count(leaf_id), 1);
     }
 
     #[test]

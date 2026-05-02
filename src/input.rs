@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{App, BulkInsertStep, Column, ConfirmAction, Mode};
+use crate::app::{App, BulkInsertStep, Column, ConfirmAction, Mode, ViewMode};
 
 pub enum AppAction {
     Quit,
@@ -22,16 +22,35 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
 }
 
 fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
+    // Keys that work in both planning and action mode
     match key.code {
         KeyCode::Char('q') => return AppAction::Quit,
 
-        // Navigation
+        KeyCode::Char('j') | KeyCode::Down => app.move_cursor_down(),
+        KeyCode::Char('k') | KeyCode::Up => app.move_cursor_up(),
+
+        KeyCode::Char(c @ '1'..='9') => app.toggle_slot((c as u8 - b'1') as usize),
+        KeyCode::Char('0') => app.toggle_slot(9),
+        KeyCode::Char('`') => app.toggle_unc(),
+        KeyCode::Char('=') => app.enable_all(),
+        KeyCode::Char('-') => app.disable_all(),
+        KeyCode::Char('P') => app.begin_project_edit(),
+        KeyCode::Char('?') => app.mode = Mode::Help,
+
+        _ => return match app.view_mode {
+            ViewMode::Board => handle_action_keys(app, key),
+            ViewMode::Tree => handle_planning_keys(app, key),
+        },
+    }
+    AppAction::None
+}
+
+/// Action mode (kanban): navigate columns, move tasks between columns, enter planning.
+fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
+    match key.code {
         KeyCode::Char('h') | KeyCode::Left => app.focus_prev_col(),
         KeyCode::Char('l') | KeyCode::Right => app.focus_next_col(),
-        KeyCode::Char('k') | KeyCode::Up => app.move_cursor_up(),
-        KeyCode::Char('j') | KeyCode::Down => app.move_cursor_down(),
 
-        // Move card between columns
         KeyCode::Char('L') => {
             app.move_selected_right();
             return AppAction::Save;
@@ -41,13 +60,34 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
-        // Reorder within column
+        // Cycle kanban sort order
+        KeyCode::Char('s') => app.cycle_sort(),
+
+        // Enter planning mode for the selected task's project
+        KeyCode::Enter => app.enter_planning_for_selected(),
+
+        _ => {}
+    }
+    AppAction::None
+}
+
+/// Planning mode (tree): structural operations only; Left/Right cycle projects, v exits to kanban.
+fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
+    match key.code {
+        // Cycle through projects
+        KeyCode::Left => app.cycle_project(-1),
+        KeyCode::Right => app.cycle_project(1),
+
+        // Return to action mode (kanban)
+        KeyCode::Char('v') => app.exit_planning(),
+
+        // Reorder within tree (sibling-aware)
         KeyCode::Char('K') => {
-            app.swap_up();
+            app.tree_swap_up();
             return AppAction::Save;
         }
         KeyCode::Char('J') => {
-            app.swap_down();
+            app.tree_swap_down();
             return AppAction::Save;
         }
 
@@ -65,55 +105,28 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
             }
         }
 
-        // Edit
-        KeyCode::Char('i') => app.begin_edit(),
+        // Edit title — 'i' cursor at start, 'a' cursor at end
+        KeyCode::Char('i') => app.begin_edit(false),
+        KeyCode::Char('a') => app.begin_edit(true),
 
         // Delete
         KeyCode::Char('d') => app.delete_selected(),
 
-        // Make child of task above
+        // Relationships
         KeyCode::Char('>') => {
             app.make_child();
             return AppAction::Save;
         }
-        // Promote to root
         KeyCode::Char('<') => {
             app.make_root();
             return AppAction::Save;
         }
 
-        // Move card to project (wait for digit)
+        // Project assignment
         KeyCode::Char('m') => app.begin_move_project(),
-
-        // Project slot toggles (1-9, 0)
-        KeyCode::Char(c @ '1'..='9') => {
-            let slot = (c as u8 - b'1') as usize;
-            app.toggle_slot(slot);
-        }
-        KeyCode::Char('0') => {
-            app.toggle_slot(9);
-        }
-
-        // Toggle unclassified tasks
-        KeyCode::Char('`') => {
-            app.toggle_unc();
-        }
-
-        // Enable / disable all project pills
-        KeyCode::Char('=') => app.enable_all(),
-        KeyCode::Char('-') => app.disable_all(),
 
         // Bulk insert children
         KeyCode::Char('A') => app.begin_bulk_insert(),
-
-        // Project slot management
-        KeyCode::Char('P') => app.begin_project_edit(),
-
-        // Toggle view (tree ↔ board)
-        KeyCode::Char('v') => app.toggle_view(),
-
-        // Help
-        KeyCode::Char('?') => app.mode = Mode::Help,
 
         _ => {}
     }
@@ -170,12 +183,37 @@ fn handle_edit(app: &mut App, key: KeyEvent) -> AppAction {
                 app.commit_edit();
                 return AppAction::Save;
             }
+            KeyCode::Left => {
+                if state.cursor_pos > 0 {
+                    state.cursor_pos -= 1;
+                }
+                return AppAction::None;
+            }
+            KeyCode::Right => {
+                let len = state.title.chars().count();
+                if state.cursor_pos < len {
+                    state.cursor_pos += 1;
+                }
+                return AppAction::None;
+            }
             KeyCode::Backspace => {
-                state.title.pop();
+                if state.cursor_pos > 0 {
+                    let byte_pos = state.title.char_indices()
+                        .nth(state.cursor_pos - 1)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    state.title.remove(byte_pos);
+                    state.cursor_pos -= 1;
+                }
                 return AppAction::None;
             }
             KeyCode::Char(c) => {
-                state.title.push(c);
+                let byte_pos = state.title.char_indices()
+                    .nth(state.cursor_pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(state.title.len());
+                state.title.insert(byte_pos, c);
+                state.cursor_pos += 1;
                 return AppAction::None;
             }
             _ => {}

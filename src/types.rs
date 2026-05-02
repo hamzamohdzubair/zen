@@ -30,7 +30,6 @@ pub struct Transition {
 pub struct Task {
     pub id: Uuid,
     pub title: String,
-    pub description: Option<String>,
     pub project: String,
     pub status: Status,
     pub parent_id: Option<Uuid>,
@@ -44,7 +43,6 @@ impl Task {
         Self {
             id: Uuid::new_v4(),
             title,
-            description: None,
             project,
             status,
             parent_id: None,
@@ -124,7 +122,6 @@ mod tests {
         assert!(t.transitions.is_empty());
         assert!(t.parent_id.is_none());
         assert!(t.children.is_empty());
-        assert!(t.description.is_none());
     }
 
     #[test]

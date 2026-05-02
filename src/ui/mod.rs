@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, BulkInsertStep, Mode, ViewMode};
+use crate::app::{App, BulkInsertStep, KanbanSort, Mode, ViewMode};
 use board::project_to_color;
 
 pub fn pill_span(key: char, name: &str, count: usize, active: bool, color: Color) -> Span<'static> {
@@ -53,7 +53,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_status(frame, app, chunks[1]);
 
     if matches!(app.mode, Mode::Help) {
-        help::draw_help(frame);
+        help::draw_help(frame, app.view_mode);
     }
 }
 
@@ -61,7 +61,10 @@ const SEP: &str = "│";
 
 pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let mode_str = match &app.mode {
-        Mode::Normal => "NORMAL",
+        Mode::Normal => match app.view_mode {
+            ViewMode::Tree => "PLAN",
+            ViewMode::Board => "ACTION",
+        },
         Mode::Insert => "INSERT",
         Mode::Edit => "EDIT",
         Mode::Move => "MOVE",
@@ -76,9 +79,18 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let mut spans = vec![
         Span::styled(
             format!(" {} ", mode_str),
-            Style::default().fg(Color::Black).bg(mode_color(&app.mode)),
+            Style::default().fg(Color::Black).bg(mode_color_for(app)),
         ),
     ];
+
+    // Sort pill — only shown in action mode (kanban)
+    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal) {
+        let (sort_label, sort_color) = match app.kanban_sort {
+            KanbanSort::Age     => (" AGE ", Color::Indexed(67)),
+            KanbanSort::Project => (" PRO ", Color::Indexed(64)),
+        };
+        spans.push(Span::styled(sort_label, Style::default().fg(Color::Black).bg(sort_color)));
+    }
 
     match &app.mode {
         Mode::Move => {
@@ -164,6 +176,16 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn mode_color_for(app: &App) -> Color {
+    match &app.mode {
+        Mode::Normal => match app.view_mode {
+            ViewMode::Tree => Color::Indexed(33),   // blue — planning
+            ViewMode::Board => Color::Indexed(208),  // orange — action
+        },
+        mode => mode_color(mode),
+    }
 }
 
 fn mode_color(mode: &Mode) -> Color {

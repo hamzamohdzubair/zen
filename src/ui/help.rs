@@ -4,7 +4,61 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-const SECTIONS: &[(&str, &[(&str, &str)])] = &[
+use crate::app::ViewMode;
+
+const PLANNING_SECTIONS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Navigation",
+        &[
+            ("h / ←", "previous project"),
+            ("l / →", "next project"),
+            ("k / ↑", "move cursor up"),
+            ("j / ↓", "move cursor down"),
+        ],
+    ),
+    (
+        "Planning",
+        &[
+            ("o", "new task below"),
+            ("O", "new task above"),
+            ("i", "edit task title"),
+            ("d", "delete task"),
+            ("K / J", "reorder task up / down"),
+            ("> / <", "indent / promote task"),
+            ("m, then 1-9", "assign task to project"),
+            ("A", "bulk add children"),
+        ],
+    ),
+    (
+        "Insert Mode",
+        &[
+            ("Enter", "confirm and create task"),
+            ("Esc", "cancel"),
+            ("Tab", "indent  →  make child of task above"),
+            ("Shift-Tab", "unindent  →  promote to parent level"),
+        ],
+    ),
+    (
+        "Projects",
+        &[
+            ("P", "edit project slots  (← → pick, Enter save)"),
+            ("1-9 / 0", "toggle project filter"),
+            ("=", "enable all filters"),
+            ("-", "disable all filters"),
+            ("`", "toggle unclassified tasks"),
+        ],
+    ),
+    (
+        "General",
+        &[
+            ("v", "back to action mode  (kanban)"),
+            ("?", "open / close help"),
+            ("q", "quit"),
+        ],
+    ),
+];
+
+const ACTION_SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Navigation",
         &[
@@ -15,53 +69,49 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
-        "Cards",
+        "Action",
         &[
-            ("o", "new card below (to-do if in doing/done)"),
-            ("O", "new card above (to-do only)"),
-            ("i", "edit selected card title"),
-            ("d", "delete selected card"),
-            ("H / L", "move card left / right column"),
-            ("K / J", "reorder card up / down"),
-            ("> / <", "indent / promote card"),
-            ("m, then 1-9", "assign card to project slot"),
-        ],
-    ),
-    (
-        "Insert Mode",
-        &[
-            ("Enter", "confirm and create card"),
-            ("Esc", "cancel"),
-            ("Tab", "indent  →  make child of card above"),
-            ("Shift-Tab", "unindent  →  promote to parent level"),
+            ("L", "advance task  →  (todo → doing → done)"),
+            ("H", "revert task  ←  (done → doing → todo)"),
+            ("Enter", "open project in planning mode  (tree)"),
         ],
     ),
     (
         "Projects",
         &[
-            ("P", "enter project edit  (← → pick slot, Enter save)"),
-            ("1-9 / 0", "toggle project filter on / off"),
-            ("=", "enable all project filters"),
-            ("-", "disable all project filters"),
+            ("P", "edit project slots  (← → pick, Enter save)"),
+            ("1-9 / 0", "toggle project filter"),
+            ("=", "enable all filters"),
+            ("-", "disable all filters"),
             ("`", "toggle unclassified tasks"),
         ],
     ),
     (
         "General",
         &[
-            ("?", "open / close this help"),
+            ("?", "open / close help"),
             ("q", "quit"),
         ],
     ),
 ];
 
-pub fn draw_help(frame: &mut Frame) {
+pub fn draw_help(frame: &mut Frame, view_mode: ViewMode) {
+    let sections = match view_mode {
+        ViewMode::Tree => PLANNING_SECTIONS,
+        ViewMode::Board => ACTION_SECTIONS,
+    };
+
     let area = centered_rect(66, 85, frame.area());
 
     frame.render_widget(Clear, area);
 
+    let title = match view_mode {
+        ViewMode::Tree => " Planning Mode  —  ? / Esc to close ",
+        ViewMode::Board => " Action Mode  —  ? / Esc to close ",
+    };
+
     let block = Block::default()
-        .title(" Help  —  ? / Esc to close ")
+        .title(title)
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -72,7 +122,7 @@ pub fn draw_help(frame: &mut Frame) {
 
     let mut lines: Vec<Line> = vec![Line::from("")];
 
-    for (section, bindings) in SECTIONS {
+    for (section, bindings) in sections {
         lines.push(Line::from(Span::styled(
             format!("  {}  ", section),
             Style::default()

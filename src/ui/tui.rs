@@ -2,25 +2,19 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Column, InsertPosition, Mode};
 use crate::types::Status;
-use super::{pill_span, slot_key_char, unc_pill_span};
-use super::board::project_to_color;
-
-const GUTTER_WIDTH: u16 = 10;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum RowKind {
-    Next,
-    Leaf,
+    Todo,
     Doing,
     Done,
-    ParentTodo,
 }
 
 pub struct TuiRow {
@@ -28,6 +22,10 @@ pub struct TuiRow {
     pub title: String,
     pub depth: usize,
     pub kind: RowKind,
+    /// Visual prefix including tree connectors, e.g. "│  ├─ "
+    pub display_prefix: String,
+    /// Prefix to pass down to children of this row, e.g. "│  │  "
+    pub children_prefix: String,
 }
 
 pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
@@ -49,15 +47,15 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
         .collect();
 
     let mut rows: Vec<TuiRow> = Vec::new();
-    let mut first_next_found = false;
 
     fn visit(
         id: Uuid,
         depth: usize,
+        parent_children_prefix: &str,
+        is_last: bool,
         visible_ids: &HashSet<Uuid>,
         tasks_by_id: &HashMap<Uuid, &crate::types::Task>,
         rows: &mut Vec<TuiRow>,
-        first_next_found: &mut bool,
     ) {
         let task = match tasks_by_id.get(&id) {
             Some(t) => t,
@@ -67,35 +65,43 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
         let kind = match task.status {
             Status::Done => RowKind::Done,
             Status::Doing => RowKind::Doing,
-            Status::Todo => {
-                let has_active_children = task.children.iter().any(|&cid| {
-                    visible_ids.contains(&cid)
-                        && tasks_by_id.get(&cid)
-                            .map(|c| matches!(c.status, Status::Todo | Status::Doing))
-                            .unwrap_or(false)
-                });
-                if has_active_children {
-                    RowKind::ParentTodo
-                } else if !*first_next_found {
-                    *first_next_found = true;
-                    RowKind::Next
-                } else {
-                    RowKind::Leaf
-                }
-            }
+            Status::Todo => RowKind::Todo,
         };
 
-        rows.push(TuiRow { id, title: task.title.clone(), depth, kind });
+        let (display_prefix, children_prefix) = if depth == 0 {
+            (String::new(), String::new())
+        } else {
+            let connector = if is_last { "╰─ " } else { "├─ " };
+            let child_cont = if is_last { "   " } else { "│  " };
+            (
+                format!("{}{}", parent_children_prefix, connector),
+                format!("{}{}", parent_children_prefix, child_cont),
+            )
+        };
 
-        for &cid in &task.children {
-            if visible_ids.contains(&cid) {
-                visit(cid, depth + 1, visible_ids, tasks_by_id, rows, first_next_found);
-            }
+        let visible_children: Vec<Uuid> = task.children.iter()
+            .filter(|&&cid| visible_ids.contains(&cid))
+            .copied()
+            .collect();
+
+        rows.push(TuiRow {
+            id,
+            title: task.title.clone(),
+            depth,
+            kind,
+            display_prefix,
+            children_prefix: children_prefix.clone(),
+        });
+
+        let n = visible_children.len();
+        for (i, &cid) in visible_children.iter().enumerate() {
+            visit(cid, depth + 1, &children_prefix, i == n - 1, visible_ids, tasks_by_id, rows);
         }
     }
 
-    for root_id in roots {
-        visit(root_id, 0, &visible_ids, &tasks_by_id, &mut rows, &mut first_next_found);
+    let n = roots.len();
+    for (i, &root_id) in roots.iter().enumerate() {
+        visit(root_id, 0, "", i == n - 1, &visible_ids, &tasks_by_id, &mut rows);
     }
 
     rows
@@ -153,107 +159,54 @@ fn inline_insert_row(app: &App) -> Option<(usize, TuiRow)> {
                 .unwrap_or(rows.len())
         }
     };
+    let insert_idx = insert_idx.min(rows.len());
 
-    let parent_depth = state.parent_id
-        .and_then(|pid| rows.iter().find(|r| r.id == pid))
-        .map(|r| r.depth)
-        .unwrap_or(0);
-
-    let depth = if state.parent_id.is_some() { parent_depth + 1 } else { 0 };
+    let (depth, display_prefix, children_prefix) = if let Some(pid) = state.parent_id {
+        let parent = rows.iter().find(|r| r.id == pid);
+        let d = parent.map(|p| p.depth + 1).unwrap_or(1);
+        let pcprefix = parent.map(|p| p.children_prefix.as_str()).unwrap_or("");
+        let has_sibling_after = rows.get(insert_idx).map(|r| r.depth == d).unwrap_or(false);
+        let connector = if has_sibling_after { "├─ " } else { "╰─ " };
+        let child_cont = if has_sibling_after { "│  " } else { "   " };
+        (
+            d,
+            format!("{}{}", pcprefix, connector),
+            format!("{}{}", pcprefix, child_cont),
+        )
+    } else {
+        (0, String::new(), String::new())
+    };
 
     let title = format!("{}\u{2588}", state.title);
     let kind = match state.status {
-        Status::Todo => RowKind::Leaf,
+        Status::Todo => RowKind::Todo,
         Status::Doing => RowKind::Doing,
         Status::Done => RowKind::Done,
     };
 
-    Some((insert_idx.min(rows.len()), TuiRow { id: Uuid::nil(), title, depth, kind }))
-}
-
-fn gutter_for(kind: RowKind) -> (&'static str, Style) {
-    match kind {
-        RowKind::Next => (
-            "▶ NEXT    ",
-            Style::default().fg(Color::Black).bg(Color::Indexed(46)),
-        ),
-        RowKind::Doing => (
-            "  DOING   ",
-            Style::default().fg(Color::Black).bg(Color::Indexed(214)),
-        ),
-        RowKind::Done => (
-            "  DONE    ",
-            Style::default().fg(Color::Indexed(242)).bg(Color::Indexed(236)),
-        ),
-        RowKind::Leaf | RowKind::ParentTodo => ("          ", Style::default()),
-    }
+    Some((insert_idx, TuiRow { id: Uuid::nil(), title, depth, kind, display_prefix, children_prefix }))
 }
 
 fn title_style_for(kind: RowKind) -> Style {
     match kind {
-        RowKind::Next => Style::default().fg(Color::Indexed(46)).add_modifier(Modifier::BOLD),
+        RowKind::Todo => Style::default().fg(Color::Indexed(252)),
         RowKind::Doing => Style::default().fg(Color::Indexed(214)).add_modifier(Modifier::BOLD),
-        RowKind::Leaf => Style::default().fg(Color::Indexed(252)),
-        RowKind::ParentTodo => Style::default().fg(Color::Indexed(242)).add_modifier(Modifier::DIM),
         RowKind::Done => Style::default()
             .fg(Color::Indexed(240))
             .add_modifier(Modifier::CROSSED_OUT),
     }
 }
 
-fn truncate_to(s: String, max_chars: usize) -> String {
+fn truncate_to(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
-        s
+        s.to_string()
     } else {
         s.chars().take(max_chars).collect()
     }
 }
 
 pub fn draw_tui(frame: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(area);
-
-    draw_header(frame, app, chunks[0]);
-    draw_pills(frame, app, chunks[1]);
-    draw_task_area(frame, app, app.tui_scroll_offset, chunks[2]);
-}
-
-fn draw_header(frame: &mut Frame, _app: &App, area: Rect) {
-    let sep = Style::default().fg(Color::Indexed(240));
-    let spans = vec![
-        Span::styled(" TUI ", Style::default().fg(Color::Black).bg(Color::Blue)),
-        Span::styled("│", sep),
-        Span::styled(
-            "  j/k navigate  L/H move  i/o insert  < > indent  d delete  ? help  v board  q quit",
-            Style::default().fg(Color::Indexed(242)),
-        ),
-    ];
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn draw_pills(frame: &mut Frame, app: &App, area: Rect) {
-    let mut spans: Vec<Span> = Vec::new();
-
-    if app.has_unc_tasks() {
-        spans.push(unc_pill_span(app.unc_doable_count(), app.show_unc));
-    }
-
-    for slot in 0..10 {
-        if let Some(name) = &app.projects[slot] {
-            let key = slot_key_char(slot);
-            let count = app.doable_count_for_slot(slot);
-            let color = project_to_color(name);
-            spans.push(pill_span(key, name, count, app.active_slots[slot], color));
-        }
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    draw_task_area(frame, app, app.tui_scroll_offset, area);
 }
 
 fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect) {
@@ -270,32 +223,83 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
     }
 
     let selected_id = app.selected_task_id(app.focused_col);
+    let meta_style = Style::default().fg(Color::Indexed(238));
+    let num_style = Style::default().fg(Color::Indexed(245));
+
+    // Pre-compute hierarchical labels (e.g. "1", "1.1", "1.2", "2") across all rows
+    // so that scrolled-off rows still count correctly.
+    let mut depth_counters: Vec<usize> = Vec::new();
+    let num_labels: Vec<String> = rows.iter().map(|row| {
+        if row.id == Uuid::nil() {
+            return String::new();
+        }
+        let d = row.depth;
+        if d < depth_counters.len() {
+            depth_counters.truncate(d + 1);
+            depth_counters[d] += 1;
+        } else {
+            depth_counters.push(1);
+        }
+        depth_counters.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(".")
+    }).collect();
 
     let mut y = area.y;
-    for row in rows.iter().skip(scroll_offset).take(area.height as usize) {
+    for (row_idx, row) in rows.iter().enumerate().skip(scroll_offset).take(area.height as usize) {
+        let is_inline = row.id == Uuid::nil();
+
         let is_selected = selected_id == Some(row.id);
+        let is_editing = matches!((&app.mode, &app.edit), (Mode::Edit, Some(es)) if es.task_id == row.id);
+        let bg = if is_editing {
+            Some(Color::Rgb(30, 75, 45))
+        } else if is_selected {
+            Some(Color::Indexed(238))
+        } else {
+            None
+        };
+        let ms = if let Some(bg) = bg { meta_style.bg(bg) } else { meta_style };
 
-        let (gutter_text, gutter_style) = gutter_for(row.kind);
-        frame.render_widget(
-            Paragraph::new(Span::styled(gutter_text, gutter_style)),
-            Rect { x: area.x, y, width: GUTTER_WIDTH, height: 1 },
-        );
+        let num_str = if is_inline || num_labels[row_idx].is_empty() {
+            String::new()
+        } else {
+            format!("{} ", num_labels[row_idx])
+        };
+        let prefix_chars = row.display_prefix.chars().count() + num_str.chars().count();
+        let title_width = (area.width as usize).saturating_sub(prefix_chars);
+        let raw_title = if !is_inline {
+            if let (Mode::Edit, Some(es)) = (&app.mode, &app.edit) {
+                if es.task_id == row.id {
+                    let mut chars: Vec<char> = es.title.chars().collect();
+                    chars.insert(es.cursor_pos, '\u{2588}');
+                    chars.iter().collect()
+                } else {
+                    row.title.clone()
+                }
+            } else {
+                row.title.clone()
+            }
+        } else {
+            row.title.clone()
+        };
+        let title_text = truncate_to(&raw_title, title_width);
 
-        let title_x = area.x + GUTTER_WIDTH;
-        let title_width = area.width.saturating_sub(GUTTER_WIDTH);
-        let title_area = Rect { x: title_x, y, width: title_width, height: 1 };
+        let mut title_style = title_style_for(row.kind);
+        if let Some(bg) = bg { title_style = title_style.bg(bg); }
 
-        let indent = "  ".repeat(row.depth);
-        let connector = if row.depth > 0 { "╰─ " } else { "" };
-        let full = format!("{}{}{}", indent, connector, row.title);
-        let truncated = truncate_to(full, title_width as usize);
-
-        let mut style = title_style_for(row.kind);
-        if is_selected {
-            style = style.bg(Color::Indexed(238));
+        let mut spans: Vec<Span> = Vec::new();
+        if !row.display_prefix.is_empty() {
+            spans.push(Span::styled(row.display_prefix.clone(), ms));
         }
+        if !num_str.is_empty() {
+            let ns = if let Some(bg) = bg { num_style.bg(bg) } else { num_style };
+            spans.push(Span::styled(num_str, ns));
+        }
+        spans.push(Span::styled(title_text, title_style));
 
-        frame.render_widget(Paragraph::new(Span::styled(truncated, style)), title_area);
+        let para_style = if let Some(bg) = bg { Style::default().bg(bg) } else { Style::default() };
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(para_style),
+            Rect { x: area.x, y, width: area.width, height: 1 },
+        );
 
         y += 1;
     }

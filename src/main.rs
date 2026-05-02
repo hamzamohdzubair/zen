@@ -15,7 +15,7 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use app::{App, ViewMode};
+use app::{App, Mode, ViewMode};
 use input::{AppAction, handle_key};
 use ui::done::DoneApp;
 use ui::stats::StatsApp;
@@ -30,8 +30,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Launch the kanban board
-    Kanban,
     /// Launch the tree TUI
     Tui,
     /// Browse all completed tasks
@@ -57,7 +55,6 @@ enum ExportFilter {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Kanban => run_kanban(),
         Command::Tui => run_tui(),
         Command::Done => run_done(),
         Command::Stats => run_stats(),
@@ -66,12 +63,8 @@ fn main() -> io::Result<()> {
     }
 }
 
-fn run_kanban() -> io::Result<()> {
-    run_main_tui(ViewMode::Board)
-}
-
 fn run_tui() -> io::Result<()> {
-    run_main_tui(ViewMode::Tree)
+    run_main_tui(ViewMode::Board)
 }
 
 fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
@@ -92,10 +85,10 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
             if let Event::Key(key) = event::read()? {
                 app.status_message = None;
 
-                // In tree view, j/k drive tree navigation and scroll
-                if app.view_mode == ViewMode::Tree {
+                // In tree view normal mode, j/k drive tree navigation and scroll
+                if app.view_mode == ViewMode::Tree && app.mode == Mode::Normal {
                     let task_area_height =
-                        (terminal.size()?.height as usize).saturating_sub(3);
+                        (terminal.size()?.height as usize).saturating_sub(1);
                     match key.code {
                         KeyCode::Char('j') | KeyCode::Down => {
                             tui::navigate_tree(&mut app, 1);
@@ -121,7 +114,7 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
 
                 if app.view_mode == ViewMode::Tree {
                     let task_area_height =
-                        (terminal.size()?.height as usize).saturating_sub(3);
+                        (terminal.size()?.height as usize).saturating_sub(1);
                     app.tui_scroll_offset =
                         tui::compute_scroll(&app, app.tui_scroll_offset, task_area_height);
                 }
