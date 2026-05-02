@@ -66,7 +66,6 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             ViewMode::Board => "ACTION",
         },
         Mode::Insert => "INSERT",
-        Mode::Edit => "EDIT",
         Mode::Move => "MOVE",
         Mode::ProjectEdit => "PROJ",
         Mode::Help => "HELP",
@@ -179,7 +178,6 @@ fn mode_color(mode: &Mode) -> Color {
     match mode {
         Mode::Normal => Color::Blue,
         Mode::Insert => Color::Green,
-        Mode::Edit => Color::Yellow,
         Mode::Move => Color::Cyan,
         Mode::ProjectEdit => Color::Magenta,
         Mode::Help => Color::Indexed(240),

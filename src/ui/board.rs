@@ -112,7 +112,7 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                 let is_moving = matches!(app.mode, Mode::Move)
                     && app.move_state.as_ref().map(|ms| ms.task_id == task.id).unwrap_or(false);
 
-                let inline_edit = if matches!(app.mode, Mode::Edit) {
+                let inline_edit = if matches!(app.mode, Mode::Insert) && app.edit.is_some() {
                     app.edit.as_ref().and_then(|es| {
                         if es.task_id == task.id { Some(es.title.as_str()) } else { None }
                     })
@@ -156,7 +156,7 @@ fn draw_card(
 
     let active = selected && inline_edit.is_none() && !is_moving;
     let bg = if inline_edit.is_some() {
-        Color::Indexed(58)
+        Color::Indexed(120)
     } else if is_moving {
         Color::Indexed(23)
     } else {
@@ -189,8 +189,7 @@ fn draw_inline_card(frame: &mut Frame, state: &InsertState, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let project_color = project_to_color(&state.project);
-    let bg = project_color;
+    let bg = Color::Indexed(120);
     let fg = Color::Black;
 
     let text = format!("{}█", state.title);

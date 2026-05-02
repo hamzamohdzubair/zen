@@ -8,7 +8,6 @@ use crate::types::{Status, Task};
 pub enum Mode {
     Normal,
     Insert,
-    Edit,
     Move,
     ProjectEdit,
     Help,
@@ -1182,7 +1181,7 @@ impl App {
                     title: task.title.clone(),
                     cursor_pos,
                 });
-                self.mode = Mode::Edit;
+                self.mode = Mode::Insert;
             }
         }
     }

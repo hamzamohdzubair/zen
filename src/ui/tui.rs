@@ -255,10 +255,10 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let is_inline = row.id == Uuid::nil();
 
         let is_selected = selected_id == Some(row.id);
-        let is_editing = app.mode == Mode::Edit
+        let is_editing = app.mode == Mode::Insert
             && app.edit.as_ref().map(|es| es.task_id == row.id).unwrap_or(false);
         let bg = if is_editing {
-            Some(Color::Indexed(22))
+            Some(Color::Indexed(120))
         } else if is_selected {
             Some(Color::Indexed(238))
         } else {

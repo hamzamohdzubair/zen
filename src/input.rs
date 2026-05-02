@@ -11,8 +11,13 @@ pub enum AppAction {
 pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
     match &app.mode.clone() {
         Mode::Normal => handle_normal(app, key),
-        Mode::Insert => handle_insert(app, key),
-        Mode::Edit => handle_edit(app, key),
+        Mode::Insert => {
+            if app.insert.is_some() {
+                handle_insert(app, key)
+            } else {
+                handle_edit(app, key)
+            }
+        }
         Mode::Move => handle_move(app, key),
         Mode::ProjectEdit => handle_project_edit(app, key),
         Mode::Help => handle_help(app, key),
