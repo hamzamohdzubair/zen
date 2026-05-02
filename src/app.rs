@@ -578,7 +578,7 @@ impl App {
         if dest == col { return; }
         let Some(id) = self.selected_task_id(col) else { return; };
         let parent_id = self.task_ref(id).and_then(|t| t.parent_id);
-        let src_status = col.status();
+        let _src_status = col.status();
         let new_status = dest.status();
         if let Some(task) = self.task_mut(id) {
             task.transition_to(new_status.clone());
