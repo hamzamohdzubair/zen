@@ -81,14 +81,22 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
-    // Sort pill — shown in kanban mode only when Todo column is focused
-    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal)
-        && app.focused_col == crate::app::Column::Todo {
-        let (sort_label, sort_color) = match app.kanban_sort {
-            KanbanSort::Age     => (" AGE ", Color::Indexed(67)),
-            KanbanSort::Project => (" PRO ", Color::Indexed(64)),
+    // Focus + sort pills — shown in kanban normal mode
+    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal) {
+        let (focus_label, focus_color) = if app.kanban_focus {
+            (" 1ST ", Color::Indexed(172))
+        } else {
+            (" ALL ", Color::Indexed(240))
         };
-        spans.push(Span::styled(sort_label, Style::default().fg(Color::Black).bg(sort_color)));
+        spans.push(Span::styled(focus_label, Style::default().fg(Color::Black).bg(focus_color)));
+
+        if app.focused_col == crate::app::Column::Todo {
+            let (sort_label, sort_color) = match app.kanban_sort {
+                KanbanSort::Age     => (" AGE ", Color::Indexed(67)),
+                KanbanSort::Project => (" PRO ", Color::Indexed(64)),
+            };
+            spans.push(Span::styled(sort_label, Style::default().fg(Color::Black).bg(sort_color)));
+        }
     }
 
     match &app.mode {

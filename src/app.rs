@@ -112,6 +112,8 @@ pub struct App {
     pub active_slots: [bool; 10],
     pub show_unc: bool,
     pub kanban_sort: KanbanSort,
+    /// When true, the Todo column shows only the first leaf task per project (default on).
+    pub kanban_focus: bool,
     /// Saved kanban filter state, restored when exiting planning mode.
     pub saved_slots: [bool; 10],
     pub saved_show_unc: bool,
@@ -141,6 +143,7 @@ impl App {
             active_slots: [true; 10],
             show_unc: true,
             kanban_sort: KanbanSort::Age,
+            kanban_focus: true,
             saved_slots: [true; 10],
             saved_show_unc: true,
             mode: Mode::Normal,
@@ -391,9 +394,18 @@ impl App {
                     let tree_key = dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX) as u64;
                     (pk, tree_key)
                 });
+                if self.kanban_focus {
+                    let mut seen = HashSet::new();
+                    tasks.retain(|t| seen.insert(t.project.clone()));
+                }
             }
         }
         tasks
+    }
+
+    pub fn toggle_kanban_focus(&mut self) {
+        self.kanban_focus = !self.kanban_focus;
+        self.clamp_all_cursors();
     }
 
     pub fn cycle_sort(&mut self) {

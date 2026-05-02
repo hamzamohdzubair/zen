@@ -86,6 +86,9 @@ fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
+        // Toggle focus mode: show only first leaf per project vs all tasks
+        KeyCode::Char('f') => app.toggle_kanban_focus(),
+
         // Cycle cross-project sort order (Todo column only)
         KeyCode::Char('s') => app.cycle_sort(),
 
