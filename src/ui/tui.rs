@@ -160,10 +160,24 @@ fn inline_insert_row(app: &App) -> Option<(usize, TuiRow)> {
 
     let insert_idx = match &state.position {
         InsertPosition::AtBeginning => 0,
-        InsertPosition::AfterSibling(after_id) | InsertPosition::AfterParent(after_id) => {
+        InsertPosition::AfterParent(after_id) => {
             rows.iter().position(|r| r.id == *after_id)
                 .map(|i| i + 1)
                 .unwrap_or(rows.len())
+        }
+        InsertPosition::AfterSibling(after_id) => {
+            // Skip past the sibling's full subtree so the insert row
+            // appears after all descendants, not between parent and first child.
+            if let Some(pos) = rows.iter().position(|r| r.id == *after_id) {
+                let sibling_depth = rows[pos].depth;
+                let mut end = pos + 1;
+                while end < rows.len() && rows[end].depth > sibling_depth {
+                    end += 1;
+                }
+                end
+            } else {
+                rows.len()
+            }
         }
     };
     let insert_idx = insert_idx.min(rows.len());
@@ -315,7 +329,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         if !num_str.is_empty() {
             let is_next = next_row_id == Some(row.id);
             let ns = if is_next {
-                let s = Style::default().fg(Color::Indexed(151));
+                let s = Style::default().fg(Color::Indexed(77)).add_modifier(Modifier::BOLD);
                 if let Some(bg) = bg { s.bg(bg) } else { s }
             } else if let Some(bg) = bg {
                 num_style.bg(bg)

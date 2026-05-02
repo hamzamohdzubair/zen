@@ -218,12 +218,6 @@ impl App {
         }
     }
 
-    pub fn unfold_selected(&mut self) {
-        if let Some(id) = self.selected_task_id(self.focused_col) {
-            self.collapsed.remove(&id);
-        }
-    }
-
     pub fn toggle_fold_selected(&mut self) {
         if let Some(id) = self.selected_task_id(self.focused_col) {
             if self.collapsed.contains(&id) {
@@ -269,11 +263,9 @@ impl App {
 
     /// Cycle the active project in planning mode (exclusive single-project selection).
     pub fn cycle_project(&mut self, delta: i32) {
-        // Build ordered list: None = unc, Some(slot) = named project
+        // Build ordered list: None = INBOX (always present), Some(slot) = named project
         let mut items: Vec<Option<usize>> = Vec::new();
-        if self.has_unc_tasks() {
-            items.push(None);
-        }
+        items.push(None);
         for slot in 0..10usize {
             if self.projects[slot].is_some() {
                 items.push(Some(slot));
@@ -351,10 +343,6 @@ impl App {
 
     pub fn unc_doable_count(&self) -> usize {
         self.tasks.iter().filter(|t| self.is_unc(t) && self.is_leaf_task(t)).count()
-    }
-
-    pub fn has_unc_tasks(&self) -> bool {
-        self.tasks.iter().any(|t| self.is_unc(t))
     }
 
     pub fn board_tasks_for(&self, col: Column) -> Vec<&Task> {
@@ -1953,15 +1941,7 @@ mod tests {
         assert_eq!(app.task_ref(child_id).unwrap().project, "new");
     }
 
-    // ── has_unc_tasks / unc_doable_count ──────────────────────────────────────
-
-    #[test]
-    fn has_unc_tasks_detects_unclassified() {
-        let mut app = empty_app();
-        assert!(!app.has_unc_tasks());
-        app.tasks.push(task("x", "", Status::Todo));
-        assert!(app.has_unc_tasks());
-    }
+    // ── unc_doable_count ──────────────────────────────────────────────────────
 
     #[test]
     fn unc_doable_count_counts_leaf_unc_tasks() {
