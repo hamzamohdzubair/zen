@@ -69,7 +69,6 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Edit => "EDIT",
         Mode::Move => "MOVE",
         Mode::ProjectEdit => "PROJ",
-        Mode::Confirm(_) => "CONFIRM",
         Mode::Help => "HELP",
         Mode::BulkInsert => "BULK",
     };
@@ -100,16 +99,6 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
                 " 0-9 ",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ));
-        }
-        Mode::Confirm(action) => {
-            use crate::app::ConfirmAction;
-            spans.push(Span::styled(SEP, sep_style));
-            let label = match action {
-                ConfirmAction::DeleteTask(_) => {
-                    " delete?  Enter/Esc ".to_string()
-                }
-            };
-            spans.push(Span::styled(label, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
         }
         Mode::BulkInsert => {
             spans.push(Span::styled(SEP, sep_style));
@@ -193,7 +182,6 @@ fn mode_color(mode: &Mode) -> Color {
         Mode::Edit => Color::Yellow,
         Mode::Move => Color::Cyan,
         Mode::ProjectEdit => Color::Magenta,
-        Mode::Confirm(_) => Color::Red,
         Mode::Help => Color::Indexed(240),
         Mode::BulkInsert => Color::Indexed(208),
     }

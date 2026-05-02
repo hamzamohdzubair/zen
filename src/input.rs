@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{App, BulkInsertStep, Column, ConfirmAction, Mode, ViewMode};
+use crate::app::{App, BulkInsertStep, Column, Mode, ViewMode};
 
 pub enum AppAction {
     Quit,
@@ -15,7 +15,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::Edit => handle_edit(app, key),
         Mode::Move => handle_move(app, key),
         Mode::ProjectEdit => handle_project_edit(app, key),
-        Mode::Confirm(action) => handle_confirm(app, key, action.clone()),
         Mode::Help => handle_help(app, key),
         Mode::BulkInsert => handle_bulk_insert(app, key),
     }
@@ -134,8 +133,18 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('i') => app.begin_edit(false),
         KeyCode::Char('a') => app.begin_edit(true),
 
-        // Delete
-        KeyCode::Char('d') => app.delete_selected(),
+        // Delete (dd)
+        KeyCode::Char('d') => {
+            if app.try_delete_dd() {
+                return AppAction::Save;
+            }
+        }
+
+        // Undo
+        KeyCode::Char('u') => {
+            app.undo();
+            return AppAction::Save;
+        }
 
         // Relationships
         KeyCode::Char('>') => {
@@ -364,18 +373,3 @@ fn handle_help(app: &mut App, key: KeyEvent) -> AppAction {
     AppAction::None
 }
 
-fn handle_confirm(app: &mut App, key: KeyEvent, action: ConfirmAction) -> AppAction {
-    match key.code {
-        KeyCode::Enter => match action {
-            ConfirmAction::DeleteTask(id) => {
-                app.confirm_delete(id);
-                return AppAction::Save;
-            }
-        },
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
-        }
-        _ => {}
-    }
-    AppAction::None
-}

@@ -11,7 +11,6 @@ pub enum Mode {
     Edit,
     Move,
     ProjectEdit,
-    Confirm(ConfirmAction),
     Help,
     BulkInsert,
 }
@@ -29,10 +28,6 @@ pub struct BulkInsertState {
     pub prefix_input: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConfirmAction {
-    DeleteTask(Uuid),
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewMode {
@@ -134,7 +129,9 @@ pub struct App {
     pub status_message: Option<String>,
     pub last_digit_press: Option<(usize, Instant)>,
     pub last_unc_press: Option<Instant>,
+    pub last_d_press: Option<Instant>,
     pub collapsed: HashSet<Uuid>,
+    pub undo_stack: Vec<Vec<Task>>,
 }
 
 impl App {
@@ -160,7 +157,9 @@ impl App {
             status_message: None,
             last_digit_press: None,
             last_unc_press: None,
+            last_d_press: None,
             collapsed: HashSet::new(),
+            undo_stack: Vec::new(),
         }
     }
 
@@ -689,6 +688,7 @@ impl App {
 
     /// Move selected task one visual row up in the DFS tree, reparenting if needed.
     pub fn tree_swap_up(&mut self) {
+        self.push_undo();
         let dfs = self.dfs_visible_ids();
         let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
         let i = match dfs.iter().position(|&id| id == task_id) {
@@ -754,6 +754,7 @@ impl App {
 
     /// Move selected task one visual row down in the DFS tree (past its full subtree), reparenting if needed.
     pub fn tree_swap_down(&mut self) {
+        self.push_undo();
         let dfs = self.dfs_visible_ids();
         let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
         let i = match dfs.iter().position(|&id| id == task_id) {
@@ -843,6 +844,7 @@ impl App {
     }
 
     pub fn make_child(&mut self) {
+        self.push_undo();
         let col = self.focused_col;
         let visible: Vec<Uuid> = self.nav_tasks_for(col).iter().map(|t| t.id).collect();
         let cur = self.cursor_for(col);
@@ -896,6 +898,7 @@ impl App {
     }
 
     pub fn make_root(&mut self) {
+        self.push_undo();
         let col = self.focused_col;
         if let Some(id) = self.selected_task_id(col) {
             let old_parent_id = match self.task_ref(id).and_then(|t| t.parent_id) {
@@ -922,16 +925,27 @@ impl App {
         }
     }
 
-    // ── Delete ───────────────────────────────────────────────────────────────
+    // ── Undo ─────────────────────────────────────────────────────────────────
 
-    pub fn delete_selected(&mut self) {
-        let col = self.focused_col;
-        if let Some(id) = self.selected_task_id(col) {
-            self.mode = Mode::Confirm(ConfirmAction::DeleteTask(id));
+    pub fn push_undo(&mut self) {
+        self.undo_stack.push(self.tasks.clone());
+        if self.undo_stack.len() > 50 {
+            self.undo_stack.remove(0);
         }
     }
 
-    pub fn confirm_delete(&mut self, id: Uuid) {
+    pub fn undo(&mut self) {
+        if let Some(prev) = self.undo_stack.pop() {
+            self.tasks = prev;
+            self.clamp_all_cursors();
+            self.status_message = Some("Undo".into());
+        }
+    }
+
+    // ── Delete ───────────────────────────────────────────────────────────────
+
+    /// Delete a task by ID: orphans its children and removes it from the tree.
+    pub fn delete_task(&mut self, id: Uuid) {
         let parent_id = self.task_ref(id).and_then(|t| t.parent_id);
         if let Some(pid) = parent_id {
             if let Some(parent) = self.task_mut(pid) {
@@ -949,8 +963,27 @@ impl App {
         }
         self.tasks.retain(|t| t.id != id);
         self.clamp_cursor(self.focused_col);
-        self.mode = Mode::Normal;
-        self.status_message = Some("Task deleted".into());
+        self.status_message = Some("Deleted".into());
+    }
+
+    /// Handle the `dd` double-keypress pattern. Returns true if the delete fired.
+    pub fn try_delete_dd(&mut self) -> bool {
+        let now = Instant::now();
+        let double = self.last_d_press
+            .take()
+            .map(|t| t.elapsed().as_millis() < 500)
+            .unwrap_or(false);
+        if double {
+            self.push_undo();
+            if let Some(id) = self.selected_task_id(self.focused_col) {
+                self.delete_task(id);
+            }
+            true
+        } else {
+            self.last_d_press = Some(now);
+            self.status_message = Some("d again to delete".into());
+            false
+        }
     }
 
     // ── Insert ───────────────────────────────────────────────────────────────
@@ -1802,10 +1835,10 @@ mod tests {
         assert_eq!(app.task_ref(child_id).unwrap().project, "work");
     }
 
-    // ── confirm_delete ─────────────────────────────────────────────────────────
+    // ── delete_task ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn confirm_delete_removes_task_and_orphans_children() {
+    fn delete_task_removes_task_and_orphans_children() {
         let mut parent = task("parent", "", Status::Todo);
         let mut child = task("child", "", Status::Todo);
         let parent_id = parent.id;
@@ -1813,7 +1846,7 @@ mod tests {
         child.parent_id = Some(parent_id);
         parent.children.push(child_id);
         let mut app = App::new(vec![parent, child], no_projects());
-        app.confirm_delete(parent_id);
+        app.delete_task(parent_id);
         assert!(app.task_ref(parent_id).is_none());
         assert!(app.task_ref(child_id).unwrap().parent_id.is_none());
     }
