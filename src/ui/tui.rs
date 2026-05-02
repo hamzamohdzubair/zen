@@ -26,6 +26,7 @@ pub struct TuiRow {
     pub display_prefix: String,
     /// Prefix to pass down to children of this row, e.g. "│  │  "
     pub children_prefix: String,
+    pub is_collapsed: bool,
 }
 
 pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
@@ -54,6 +55,7 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
         parent_children_prefix: &str,
         is_last: bool,
         visible_ids: &HashSet<Uuid>,
+        collapsed: &HashSet<Uuid>,
         tasks_by_id: &HashMap<Uuid, &crate::types::Task>,
         rows: &mut Vec<TuiRow>,
     ) {
@@ -84,6 +86,8 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
             .copied()
             .collect();
 
+        let is_collapsed = collapsed.contains(&id) && !visible_children.is_empty();
+
         rows.push(TuiRow {
             id,
             title: task.title.clone(),
@@ -91,17 +95,20 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
             kind,
             display_prefix,
             children_prefix: children_prefix.clone(),
+            is_collapsed,
         });
 
-        let n = visible_children.len();
-        for (i, &cid) in visible_children.iter().enumerate() {
-            visit(cid, depth + 1, &children_prefix, i == n - 1, visible_ids, tasks_by_id, rows);
+        if !is_collapsed {
+            let n = visible_children.len();
+            for (i, &cid) in visible_children.iter().enumerate() {
+                visit(cid, depth + 1, &children_prefix, i == n - 1, visible_ids, collapsed, tasks_by_id, rows);
+            }
         }
     }
 
     let n = roots.len();
     for (i, &root_id) in roots.iter().enumerate() {
-        visit(root_id, 0, "", i == n - 1, &visible_ids, &tasks_by_id, &mut rows);
+        visit(root_id, 0, "", i == n - 1, &visible_ids, &app.collapsed, &tasks_by_id, &mut rows);
     }
 
     rows
@@ -184,7 +191,7 @@ fn inline_insert_row(app: &App) -> Option<(usize, TuiRow)> {
         Status::Done => RowKind::Done,
     };
 
-    Some((insert_idx, TuiRow { id: Uuid::nil(), title, depth, kind, display_prefix, children_prefix }))
+    Some((insert_idx, TuiRow { id: Uuid::nil(), title, depth, kind, display_prefix, children_prefix, is_collapsed: false }))
 }
 
 fn title_style_for(kind: RowKind) -> Style {
@@ -240,7 +247,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         } else {
             depth_counters.push(1);
         }
-        depth_counters.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(".")
+        depth_counters.last().map(|n| n.to_string()).unwrap_or_default()
     }).collect();
 
     let mut y = area.y;
@@ -264,7 +271,10 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         } else {
             format!("{} ", num_labels[row_idx])
         };
-        let prefix_chars = row.display_prefix.chars().count() + num_str.chars().count();
+        let collapse_indicator = if row.is_collapsed { "▸ " } else { "" };
+        let prefix_chars = row.display_prefix.chars().count()
+            + num_str.chars().count()
+            + collapse_indicator.chars().count();
         let title_width = (area.width as usize).saturating_sub(prefix_chars);
         let raw_title = if is_editing {
             let es = app.edit.as_ref().unwrap();
@@ -286,6 +296,11 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         if !num_str.is_empty() {
             let ns = if let Some(bg) = bg { num_style.bg(bg) } else { num_style };
             spans.push(Span::styled(num_str, ns));
+        }
+        if !collapse_indicator.is_empty() {
+            let cs = Style::default().fg(Color::Indexed(214));
+            let cs = if let Some(bg) = bg { cs.bg(bg) } else { cs };
+            spans.push(Span::styled(collapse_indicator, cs));
         }
         spans.push(Span::styled(title_text, title_style));
 

@@ -134,6 +134,7 @@ pub struct App {
     pub status_message: Option<String>,
     pub last_digit_press: Option<(usize, Instant)>,
     pub last_unc_press: Option<Instant>,
+    pub collapsed: HashSet<Uuid>,
 }
 
 impl App {
@@ -159,6 +160,7 @@ impl App {
             status_message: None,
             last_digit_press: None,
             last_unc_press: None,
+            collapsed: HashSet::new(),
         }
     }
 
@@ -219,6 +221,18 @@ impl App {
         self.focused_col = Column::Todo;
         self.tui_scroll_offset = 0;
         self.clamp_all_cursors();
+    }
+
+    pub fn fold_selected(&mut self) {
+        if let Some(id) = self.selected_task_id(self.focused_col) {
+            self.collapsed.insert(id);
+        }
+    }
+
+    pub fn unfold_selected(&mut self) {
+        if let Some(id) = self.selected_task_id(self.focused_col) {
+            self.collapsed.remove(&id);
+        }
     }
 
     /// Exit planning (tree) mode, restoring the saved kanban filter state.

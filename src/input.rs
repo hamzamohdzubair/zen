@@ -153,6 +153,10 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         // Bulk insert children
         KeyCode::Char('A') => app.begin_bulk_insert(),
 
+        // Fold / unfold branch
+        KeyCode::Char('h') => app.fold_selected(),
+        KeyCode::Char('l') => app.unfold_selected(),
+
         _ => {}
     }
     AppAction::None
