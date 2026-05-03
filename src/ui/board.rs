@@ -59,7 +59,7 @@ pub fn draw_board(frame: &mut Frame, app: &App, area: Rect) {
 const BAR_W: usize = 12;
 
 fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
-    struct Row { name: String, rem: usize, pct: usize, pct_str: String }
+    struct Row { key: char, name: String, rem: usize, pct: usize, pct_str: String }
 
     let mut rows: Vec<Row> = Vec::new();
     for slot in 0..10 {
@@ -70,22 +70,24 @@ fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
                 .count();
             let total = rem + done;
             let pct = if total > 0 { done * 100 / total } else { 0 };
-            rows.push(Row { name: name.clone(), rem, pct, pct_str: format!("{}%", pct) });
+            let key = super::slot_key_char(slot);
+            rows.push(Row { key, name: name.clone(), rem, pct, pct_str: format!("{}%", pct) });
         }
     }
     if rows.is_empty() { return; }
 
     // Column widths: data-driven, pct column minimum 4 to always fit "100%"
+    // Name cell includes "k:" prefix, so its rendered width is name_w + 4 (" k:name ")
     let name_w = rows.iter().map(|r| r.name.len()).max().unwrap_or(1);
     let rem_w  = rows.iter().map(|r| r.rem.to_string().len()).max().unwrap_or(1);
     let pct_w  = rows.iter().map(|r| r.pct_str.len()).max().unwrap_or(4).max(4);
 
     let dim = Style::default().fg(Color::Indexed(240));
 
-    // Header row
+    // Header row — name cell padded to match data cell width (name_w + 4)
     if area.height >= 1 {
         let header = Line::from(vec![
-            Span::styled(format!(" {:width$} ", "", width = name_w), dim),
+            Span::styled(format!("  {:width$}  ", "", width = name_w), dim),
             Span::styled(format!(" {:>width$}", "r", width = rem_w), dim),
             Span::styled(format!("  {:>width$} ", "%", width = pct_w), dim),
         ]);
@@ -96,8 +98,8 @@ fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // One data row per project
-    // Layout: " {name} {rem}  {pct}  {bar} "
-    let table_w = (2 + name_w + 1 + rem_w + 2 + pct_w + 2 + BAR_W + 1) as u16;
+    // Layout: " {key}:{name} {rem}  {pct}  {bar} "
+    let table_w = (4 + name_w + 1 + rem_w + 2 + pct_w + 2 + BAR_W + 1) as u16;
     for (i, row) in rows.iter().enumerate() {
         let y = area.y + 1 + i as u16;
         if y >= area.y + area.height { break; }
@@ -106,7 +108,7 @@ fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
         let empty  = BAR_W - filled;
         let data_row = Line::from(vec![
             Span::styled(
-                format!(" {:<width$} ", row.name, width = name_w),
+                format!(" {}:{:<width$} ", row.key, row.name, width = name_w),
                 Style::default().fg(Color::Black).bg(color),
             ),
             Span::styled(
