@@ -804,45 +804,19 @@ impl App {
 
         let prev_parent = self.task_ref(prev_id).and_then(|t| t.parent_id);
 
-        if task_parent == prev_parent {
-            // Same parent: simple sibling swap
-            if let Some(pid) = task_parent {
-                if let Some(parent) = self.task_mut(pid) {
-                    let pos = parent.children.iter().position(|&c| c == task_id).unwrap();
-                    parent.children.swap(pos, pos - 1);
-                }
-            } else {
-                let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
-                let prev_idx = self.tasks.iter().position(|t| t.id == prev_id).unwrap();
-                self.tasks.swap(cur_idx, prev_idx);
+        if task_parent != prev_parent {
+            return;
+        }
+        // Same parent: simple sibling swap
+        if let Some(pid) = task_parent {
+            if let Some(parent) = self.task_mut(pid) {
+                let pos = parent.children.iter().position(|&c| c == task_id).unwrap();
+                parent.children.swap(pos, pos - 1);
             }
         } else {
-            // Reparent: task becomes sibling of prev, inserted before prev
-            if let Some(old_pid) = task_parent {
-                if let Some(old_p) = self.task_mut(old_pid) {
-                    old_p.children.retain(|&c| c != task_id);
-                }
-            }
-            if let Some(task) = self.task_mut(task_id) {
-                task.parent_id = prev_parent;
-            }
-            match prev_parent {
-                Some(new_pid) => {
-                    let pos = self.task_ref(new_pid)
-                        .and_then(|p| p.children.iter().position(|&c| c == prev_id))
-                        .unwrap_or(0);
-                    if let Some(new_p) = self.task_mut(new_pid) {
-                        new_p.children.insert(pos, task_id);
-                    }
-                }
-                None => {
-                    let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
-                    let prev_idx = self.tasks.iter().position(|t| t.id == prev_id).unwrap();
-                    let task_obj = self.tasks.remove(cur_idx);
-                    let insert_idx = if cur_idx < prev_idx { prev_idx - 1 } else { prev_idx };
-                    self.tasks.insert(insert_idx, task_obj);
-                }
-            }
+            let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
+            let prev_idx = self.tasks.iter().position(|t| t.id == prev_id).unwrap();
+            self.tasks.swap(cur_idx, prev_idx);
         }
 
         let col = self.focused_col;
@@ -873,45 +847,19 @@ impl App {
         let task_parent = self.task_ref(task_id).and_then(|t| t.parent_id);
         let next_parent = self.task_ref(next_id).and_then(|t| t.parent_id);
 
-        if task_parent == next_parent {
-            // Same parent: simple sibling swap
-            if let Some(pid) = task_parent {
-                if let Some(parent) = self.task_mut(pid) {
-                    let pos = parent.children.iter().position(|&c| c == task_id).unwrap();
-                    parent.children.swap(pos, pos + 1);
-                }
-            } else {
-                let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
-                let next_idx = self.tasks.iter().position(|t| t.id == next_id).unwrap();
-                self.tasks.swap(cur_idx, next_idx);
+        if task_parent != next_parent {
+            return;
+        }
+        // Same parent: simple sibling swap
+        if let Some(pid) = task_parent {
+            if let Some(parent) = self.task_mut(pid) {
+                let pos = parent.children.iter().position(|&c| c == task_id).unwrap();
+                parent.children.swap(pos, pos + 1);
             }
         } else {
-            // Reparent: task becomes sibling of next, inserted after next
-            if let Some(old_pid) = task_parent {
-                if let Some(old_p) = self.task_mut(old_pid) {
-                    old_p.children.retain(|&c| c != task_id);
-                }
-            }
-            if let Some(task) = self.task_mut(task_id) {
-                task.parent_id = next_parent;
-            }
-            match next_parent {
-                Some(new_pid) => {
-                    let pos = self.task_ref(new_pid)
-                        .and_then(|p| p.children.iter().position(|&c| c == next_id))
-                        .unwrap_or(0);
-                    if let Some(new_p) = self.task_mut(new_pid) {
-                        new_p.children.insert(pos + 1, task_id);
-                    }
-                }
-                None => {
-                    let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
-                    let next_idx = self.tasks.iter().position(|t| t.id == next_id).unwrap();
-                    let task_obj = self.tasks.remove(cur_idx);
-                    let insert_idx = if cur_idx < next_idx { next_idx } else { next_idx + 1 };
-                    self.tasks.insert(insert_idx, task_obj);
-                }
-            }
+            let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
+            let next_idx = self.tasks.iter().position(|t| t.id == next_id).unwrap();
+            self.tasks.swap(cur_idx, next_idx);
         }
 
         let col = self.focused_col;
@@ -1116,34 +1064,12 @@ impl App {
             let project = self.default_project_for_insert();
             (None, project, InsertPosition::AtBeginning)
         };
+        let status = if col == Column::Done { Status::Todo } else { col.status() };
         self.insert = Some(InsertState {
             title: String::new(),
             project,
             parent_id,
-            status: col.status(),
-            position,
-        });
-        self.mode = Mode::Insert;
-    }
-
-    pub fn begin_insert_todo_end(&mut self) {
-        let todo_roots: Vec<Uuid> = self.visible_tasks_for(Column::Todo)
-            .iter()
-            .filter(|t| t.parent_id.is_none())
-            .map(|t| t.id)
-            .collect();
-        let position = if let Some(&last_id) = todo_roots.last() {
-            InsertPosition::AfterSibling(last_id)
-        } else {
-            InsertPosition::AtBeginning
-        };
-        let project = self.default_project_for_insert();
-        self.focused_col = Column::Todo;
-        self.insert = Some(InsertState {
-            title: String::new(),
-            project,
-            parent_id: None,
-            status: Status::Todo,
+            status,
             position,
         });
         self.mode = Mode::Insert;
@@ -1184,11 +1110,12 @@ impl App {
             }
         };
 
+        let status = if col == Column::Done { Status::Todo } else { col.status() };
         self.insert = Some(InsertState {
             title: String::new(),
             project,
             parent_id,
-            status: col.status(),
+            status,
             position,
         });
         self.mode = Mode::Insert;

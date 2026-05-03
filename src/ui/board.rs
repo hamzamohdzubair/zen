@@ -17,7 +17,29 @@ fn task_key_char(app: &App, task: &Task) -> char {
     }
 }
 
+fn task_project_name<'a>(app: &'a App, task: &Task) -> Option<&'a str> {
+    app.slot_for_project(&task.project)
+        .and_then(|slot| app.projects[slot].as_deref())
+}
+
 pub fn draw_board(frame: &mut Frame, app: &App, area: Rect) {
+    let n_projects = app.projects.iter().filter(|p| p.is_some()).count();
+    let summary_h = if n_projects > 0 { n_projects as u16 + 1 } else { 0 }; // +1 for header row
+
+    let (summary_area, board_area) = if summary_h > 0 && summary_h < area.height {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(summary_h), Constraint::Min(0)])
+            .split(area);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, area)
+    };
+
+    if let Some(sa) = summary_area {
+        draw_project_summary(frame, app, sa);
+    }
+
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -27,10 +49,74 @@ pub fn draw_board(frame: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
-        .split(area);
+        .split(board_area);
 
     for (col, rect) in [(Column::Todo, cols[0]), (Column::Doing, cols[2]), (Column::Done, cols[4])] {
         draw_column(frame, app, col, rect);
+    }
+}
+
+fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
+    struct Row { name: String, rem: usize, pct_str: String }
+
+    let mut rows: Vec<Row> = Vec::new();
+    for slot in 0..10 {
+        if let Some(name) = &app.projects[slot] {
+            let rem = app.doable_count_for_slot(slot);
+            let done: usize = app.tasks.iter()
+                .filter(|t| &t.project == name && t.status == Status::Done && t.children.is_empty())
+                .count();
+            let total = rem + done;
+            let pct = if total > 0 { done * 100 / total } else { 0 };
+            rows.push(Row { name: name.clone(), rem, pct_str: format!("{}%", pct) });
+        }
+    }
+    if rows.is_empty() { return; }
+
+    // Column widths are driven by data values only (minimum required)
+    let name_w = rows.iter().map(|r| r.name.len()).max().unwrap_or(1);
+    let rem_w  = rows.iter().map(|r| r.rem.to_string().len()).max().unwrap_or(1);
+    let pct_w  = rows.iter().map(|r| r.pct_str.len()).max().unwrap_or(2);
+
+    let dim = Style::default().fg(Color::Indexed(240));
+
+    // Header row — short labels, right-aligned to match data columns
+    if area.height >= 1 {
+        let header = Line::from(vec![
+            Span::styled(format!(" {:width$} ", "", width = name_w), dim),
+            Span::styled(format!(" {:>width$}", "r", width = rem_w), dim),
+            Span::styled(format!("  {:>width$} ", "%", width = pct_w), dim),
+        ]);
+        frame.render_widget(
+            Paragraph::new(header),
+            Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+        );
+    }
+
+    // One data row per project
+    let table_w = (2 + name_w + 1 + rem_w + 2 + pct_w + 1) as u16;
+    for (i, row) in rows.iter().enumerate() {
+        let y = area.y + 1 + i as u16;
+        if y >= area.y + area.height { break; }
+        let color = project_to_color(&row.name);
+        let data_row = Line::from(vec![
+            Span::styled(
+                format!(" {:<width$} ", row.name, width = name_w),
+                Style::default().fg(Color::Black).bg(color),
+            ),
+            Span::styled(
+                format!(" {:>width$}", row.rem, width = rem_w),
+                Style::default().fg(Color::Indexed(250)),
+            ),
+            Span::styled(
+                format!("  {:>width$} ", row.pct_str, width = pct_w),
+                Style::default().fg(Color::Indexed(246)),
+            ),
+        ]);
+        frame.render_widget(
+            Paragraph::new(data_row),
+            Rect { x: area.x, y, width: table_w.min(area.width), height: 1 },
+        );
     }
 }
 
@@ -131,15 +217,17 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                 };
 
                 let project_key = task_key_char(app, task);
+                let project_name = task_project_name(app, task);
 
                 let h = if inline_edit.is_some() {
                     1
                 } else {
                     let content = task.title.chars().count();
-                    wrap_height(3, content, inner.width)
+                    let prefix_chars = project_name.map_or(3, |n| n.len() + 3);
+                    wrap_height(prefix_chars, content, inner.width)
                 }.min(inner.y + inner.height - y);
 
-                draw_card(frame, task, project_key, selected, is_moving, inline_edit,
+                draw_card(frame, task, project_key, project_name, selected, is_moving, inline_edit,
                           Rect { x: inner.x, y, width: inner.width, height: h });
                 y += h;
             }
@@ -158,6 +246,7 @@ fn draw_card(
     frame: &mut Frame,
     task: &Task,
     project_key: char,
+    project_name: Option<&str>,
     selected: bool,
     is_moving: bool,
     inline_edit: Option<&str>,
@@ -188,7 +277,10 @@ fn draw_card(
         let text = format!("{}█", input);
         vec![Span::styled(text, Style::default().fg(fg).bg(bg).add_modifier(bold))]
     } else {
-        let prefix = format!("{}: ", project_key);
+        let prefix = match project_name {
+            Some(name) => format!("{}:{} ", project_key, name),
+            None => format!("{}: ", project_key),
+        };
         vec![
             Span::styled(prefix, Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)),
             Span::styled(task.title.clone(), Style::default().fg(fg).bg(bg).add_modifier(bold)),

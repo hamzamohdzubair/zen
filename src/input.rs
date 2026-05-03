@@ -124,18 +124,8 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         }
 
         // Insert sibling after / before
-        KeyCode::Char('o') => {
-            if app.focused_col == Column::Todo {
-                app.begin_insert_after();
-            } else {
-                app.begin_insert_todo_end();
-            }
-        }
-        KeyCode::Char('O') => {
-            if app.focused_col == Column::Todo {
-                app.begin_insert_before();
-            }
-        }
+        KeyCode::Char('o') => app.begin_insert_after(),
+        KeyCode::Char('O') => app.begin_insert_before(),
 
         // Edit title — 'i' cursor at start, 'a' cursor at end
         KeyCode::Char('i') => app.begin_edit(false),
