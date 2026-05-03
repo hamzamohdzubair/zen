@@ -56,8 +56,10 @@ pub fn draw_board(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+const BAR_W: usize = 12;
+
 fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
-    struct Row { name: String, rem: usize, pct_str: String }
+    struct Row { name: String, rem: usize, pct: usize, pct_str: String }
 
     let mut rows: Vec<Row> = Vec::new();
     for slot in 0..10 {
@@ -68,19 +70,19 @@ fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
                 .count();
             let total = rem + done;
             let pct = if total > 0 { done * 100 / total } else { 0 };
-            rows.push(Row { name: name.clone(), rem, pct_str: format!("{}%", pct) });
+            rows.push(Row { name: name.clone(), rem, pct, pct_str: format!("{}%", pct) });
         }
     }
     if rows.is_empty() { return; }
 
-    // Column widths are driven by data values only (minimum required)
+    // Column widths: data-driven, pct column minimum 4 to always fit "100%"
     let name_w = rows.iter().map(|r| r.name.len()).max().unwrap_or(1);
     let rem_w  = rows.iter().map(|r| r.rem.to_string().len()).max().unwrap_or(1);
-    let pct_w  = rows.iter().map(|r| r.pct_str.len()).max().unwrap_or(2);
+    let pct_w  = rows.iter().map(|r| r.pct_str.len()).max().unwrap_or(4).max(4);
 
     let dim = Style::default().fg(Color::Indexed(240));
 
-    // Header row — short labels, right-aligned to match data columns
+    // Header row
     if area.height >= 1 {
         let header = Line::from(vec![
             Span::styled(format!(" {:width$} ", "", width = name_w), dim),
@@ -94,11 +96,14 @@ fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // One data row per project
-    let table_w = (2 + name_w + 1 + rem_w + 2 + pct_w + 1) as u16;
+    // Layout: " {name} {rem}  {pct}  {bar} "
+    let table_w = (2 + name_w + 1 + rem_w + 2 + pct_w + 2 + BAR_W + 1) as u16;
     for (i, row) in rows.iter().enumerate() {
         let y = area.y + 1 + i as u16;
         if y >= area.y + area.height { break; }
         let color = project_to_color(&row.name);
+        let filled = row.pct * BAR_W / 100;
+        let empty  = BAR_W - filled;
         let data_row = Line::from(vec![
             Span::styled(
                 format!(" {:<width$} ", row.name, width = name_w),
@@ -112,6 +117,19 @@ fn draw_project_summary(frame: &mut Frame, app: &App, area: Rect) {
                 format!("  {:>width$} ", row.pct_str, width = pct_w),
                 Style::default().fg(Color::Indexed(246)),
             ),
+            Span::styled(
+                " ".to_string(),
+                Style::default(),
+            ),
+            Span::styled(
+                "█".repeat(filled),
+                Style::default().fg(color),
+            ),
+            Span::styled(
+                "░".repeat(empty),
+                Style::default().fg(Color::Indexed(237)),
+            ),
+            Span::styled(" ".to_string(), Style::default()),
         ]);
         frame.render_widget(
             Paragraph::new(data_row),
@@ -258,18 +276,20 @@ fn draw_card(
 
     let active = selected && inline_edit.is_none() && !is_moving;
     let bg = if inline_edit.is_some() {
-        Color::Indexed(120)
+        Color::Indexed(114)
     } else if is_moving {
         Color::Indexed(23)
     } else {
         project_to_color(&task.project)
     };
-    let (fg, _) = if inline_edit.is_some() || is_moving {
-        (Color::White, Color::Indexed(246))
+    let fg = if is_moving {
+        Color::White
+    } else if inline_edit.is_some() {
+        Color::Black
     } else if active {
-        (Color::Indexed(253), Color::Indexed(253))
+        Color::Indexed(253)
     } else {
-        (Color::Black, Color::Black)
+        Color::Black
     };
     let bold = if active { Modifier::BOLD } else { Modifier::empty() };
 
@@ -297,14 +317,14 @@ fn draw_inline_card(frame: &mut Frame, state: &InsertState, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let bg = Color::Indexed(120);
+    let bg = Color::Indexed(114);
     let fg = Color::Black;
 
     let text = format!("{}█", state.title);
     let spans = vec![Span::styled(text, Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD))];
 
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)).wrap(Wrap { trim: false }),
         area,
     );
 }

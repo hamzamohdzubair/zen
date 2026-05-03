@@ -715,7 +715,9 @@ impl App {
         if let Some(task) = self.task_mut(id) {
             task.transition_to(new_status.clone());
         }
-        if let Some(pid) = parent_id {
+        // Propagate derived status all the way up to the root
+        let mut current_parent = parent_id;
+        while let Some(pid) = current_parent {
             let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
             let derived = if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Todo).unwrap_or(false)) {
                 Status::Todo
@@ -728,6 +730,9 @@ impl App {
                 if let Some(parent) = self.task_mut(pid) {
                     parent.transition_to(derived);
                 }
+                current_parent = self.task_ref(pid).and_then(|t| t.parent_id);
+            } else {
+                break;
             }
         }
         self.clamp_cursor(col);
