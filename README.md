@@ -4,6 +4,8 @@ A modal, keyboard-driven kanban TUI for personal task management.
 
 Tasks live in a tree. You plan structure in **Tree mode** and execute work in **Board mode**. Both views share the same data and stay in sync.
 
+![Board mode demo](assets/board.gif)
+
 ---
 
 ## Install
@@ -38,6 +40,8 @@ Three-column kanban: **Todo · Doing · Done**
 - A project summary table above the board shows remaining tasks, completion %, and a progress bar per project
 
 ### Tree mode — PLAN
+
+![Tree mode demo](assets/tree.gif)
 
 Full task hierarchy for a project.
 
