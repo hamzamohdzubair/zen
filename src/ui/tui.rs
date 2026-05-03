@@ -291,7 +291,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let is_editing = app.mode == Mode::Insert
             && app.edit.as_ref().map(|es| es.task_id == row.id).unwrap_or(false);
         let bg = if is_editing {
-            Some(Color::Indexed(120))
+            Some(Color::Green)
         } else if is_selected {
             Some(Color::Indexed(238))
         } else {
@@ -320,7 +320,11 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let title_text = truncate_to(&raw_title, title_width);
 
         let mut title_style = title_style_for(row.kind);
-        if let Some(bg) = bg { title_style = title_style.bg(bg); }
+        if is_editing {
+            title_style = title_style.bg(Color::Green).fg(Color::Black);
+        } else if let Some(bg) = bg {
+            title_style = title_style.bg(bg);
+        }
 
         let mut spans: Vec<Span> = Vec::new();
         if !row.display_prefix.is_empty() {

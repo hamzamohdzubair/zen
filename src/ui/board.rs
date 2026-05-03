@@ -278,7 +278,7 @@ fn draw_card(
 
     let active = selected && inline_edit.is_none() && !is_moving;
     let bg = if inline_edit.is_some() {
-        Color::Indexed(114)
+        Color::Green
     } else if is_moving {
         Color::Indexed(23)
     } else {
@@ -319,7 +319,7 @@ fn draw_inline_card(frame: &mut Frame, state: &InsertState, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let bg = Color::Indexed(114);
+    let bg = Color::Green;
     let fg = Color::Black;
 
     let text = format!("{}█", state.title);
