@@ -1,0 +1,25 @@
+{
+  "tasks": [
+    {
+      "id": "c0000000-0000-4000-8000-000000000001",
+      "title": "Sprint 12",
+      "project": "work",
+      "status": "Todo",
+      "parent_id": null,
+      "children": [],
+      "created_at": "2026-04-20T10:00:00Z",
+      "transitions": []
+    },
+    {
+      "id": "c0000000-0000-4000-8000-000000000002",
+      "title": "Backlog",
+      "project": "work",
+      "status": "Todo",
+      "parent_id": null,
+      "children": [],
+      "created_at": "2026-04-21T10:00:00Z",
+      "transitions": []
+    }
+  ],
+  "projects": ["work", null, null, null, null, null, null, null, null, null]
+}

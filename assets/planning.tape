@@ -1,4 +1,4 @@
-Output assets/tree.gif
+Output assets/planning.gif
 
 Set Theme "Dracula"
 Set FontSize 14
@@ -17,38 +17,42 @@ Show
 
 Type "zen tui"
 Enter
-Sleep 900ms
+Sleep 1200ms
 
-# Navigate down through the tree
+# Navigate down to Dashboard
 Type "j"
-Sleep 350ms
+Sleep 700ms
 Type "j"
-Sleep 350ms
+Sleep 700ms
 Type "j"
-Sleep 600ms
+Sleep 1000ms
 
 # Insert a new sibling after Dashboard
 Type "o"
-Sleep 300ms
+Sleep 500ms
 Type "Logout flow"
-Sleep 600ms
+Sleep 900ms
 Enter
-Sleep 600ms
+Sleep 1200ms
 
-# Indent it to become a child of Dashboard
+# Indent it — becomes a child of Dashboard
 Type ">"
-Sleep 1000ms
+Sleep 1800ms
+
+# Reorder it upward among Dashboard's children
+Type "K"
+Sleep 1200ms
 
 # Navigate up to Dashboard and fold the branch
 Type "k"
-Sleep 350ms
+Sleep 700ms
 Type "k"
-Sleep 350ms
+Sleep 700ms
 Type "h"
-Sleep 900ms
+Sleep 1500ms
 
-# Unfold
+# Unfold to reveal the structure again
 Type "l"
-Sleep 2000ms
+Sleep 3500ms
 
 Type "q"

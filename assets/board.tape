@@ -17,34 +17,34 @@ Show
 
 Type "zen tui"
 Enter
+Sleep 1200ms
+
+# Switch from Tree to Board mode
+Tab
+Sleep 1500ms
+
+# Navigate down to the second Todo task (Provision staging server)
+Type "j"
 Sleep 900ms
 
-# Switch from Tree mode to Board mode
-Tab
+# Move it to Doing — watch the columns update
+Type "L"
+Sleep 1800ms
+
+# Focus the Doing column
+Type "l"
+Sleep 900ms
+
+# Navigate down to the second Doing task
+Type "j"
 Sleep 800ms
 
-# Navigate down to second Todo task (Provision staging server)
-Type "j"
-Sleep 500ms
-
-# Move it to Doing
+# Move it to Done
 Type "L"
-Sleep 700ms
+Sleep 1800ms
 
-# Focus Doing column
+# Focus Done to see the completed task land there
 Type "l"
-Sleep 500ms
-
-# Navigate down one
-Type "j"
-Sleep 500ms
-
-# Move to Done
-Type "L"
-Sleep 700ms
-
-# Focus Done column
-Type "l"
-Sleep 2500ms
+Sleep 3500ms
 
 Type "q"
