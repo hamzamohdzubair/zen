@@ -243,7 +243,7 @@ fn draw_column(frame: &mut Frame, app: &App, col: Column, area: Rect) {
                     1
                 } else {
                     let content = task.title.chars().count();
-                    let prefix_chars = project_name.map_or(3, |n| n.len() + 3);
+                    let prefix_chars = project_name.map_or(3, |n| n.len() + 4);
                     wrap_height(prefix_chars, content, inner.width)
                 }.min(inner.y + inner.height - y);
 
@@ -300,7 +300,7 @@ fn draw_card(
         vec![Span::styled(text, Style::default().fg(fg).bg(bg).add_modifier(bold))]
     } else {
         let prefix = match project_name {
-            Some(name) => format!("{}:{} ", project_key, name),
+            Some(name) => format!("{}:{}: ", project_key, name),
             None => format!("{}: ", project_key),
         };
         vec![
