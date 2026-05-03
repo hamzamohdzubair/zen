@@ -41,16 +41,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),
             Constraint::Length(1),
+            Constraint::Min(0),
         ])
         .split(area);
 
+    draw_status(frame, app, chunks[0]);
     match app.view_mode {
-        ViewMode::Tree => tui::draw_tui(frame, app, chunks[0]),
-        ViewMode::Board => board::draw_board(frame, app, chunks[0]),
+        ViewMode::Tree => tui::draw_tui(frame, app, chunks[1]),
+        ViewMode::Board => board::draw_board(frame, app, chunks[1]),
     }
-    draw_status(frame, app, chunks[1]);
 
     if matches!(app.mode, Mode::Help) {
         help::draw_help(frame, app.view_mode);
