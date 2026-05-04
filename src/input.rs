@@ -92,8 +92,8 @@ fn handle_action_keys(app: &mut App, key: KeyEvent) -> AppAction {
         // Enter planning mode for the selected task's project
         KeyCode::Enter => app.enter_planning_for_selected(),
 
-        // Enter tree mode for the highest-priority enabled project
-        KeyCode::Tab => app.enter_planning_by_priority(),
+        // Return to tree, restoring the last-visited tree project
+        KeyCode::Tab | KeyCode::Backspace => app.enter_planning_for_last_project(),
 
         _ => {}
     }

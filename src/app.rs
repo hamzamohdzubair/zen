@@ -115,6 +115,12 @@ pub struct App {
     /// Saved kanban filter state, restored when exiting planning mode.
     pub saved_slots: [bool; 10],
     pub saved_show_unc: bool,
+    /// Last tree filter state, restored when entering tree from kanban via Tab/Backspace.
+    pub last_tree_slots: [bool; 10],
+    pub last_tree_show_unc: bool,
+    /// A non-first-leaf task forced into the Todo kanban column when the user pressed
+    /// Enter on it in tree view. Cleared when returning to tree.
+    pub forced_todo_task_id: Option<Uuid>,
     pub mode: Mode,
     pub view_mode: ViewMode,
     pub focused_col: Column,
@@ -141,6 +147,9 @@ impl App {
             kanban_sort: KanbanSort::Age,
             saved_slots: [true; 10],
             saved_show_unc: true,
+            last_tree_slots: [true; 10],
+            last_tree_show_unc: true,
+            forced_todo_task_id: None,
             mode: Mode::Normal,
             view_mode: ViewMode::Tree,
             focused_col: Column::Todo,
@@ -193,21 +202,6 @@ impl App {
         self.clamp_all_cursors();
     }
 
-    /// Enter tree mode, opening INBOX as the default view.
-    pub fn enter_planning_by_priority(&mut self) {
-        self.saved_slots = self.active_slots;
-        self.saved_show_unc = self.show_unc;
-
-        self.active_slots = [false; 10];
-        self.show_unc = true;
-
-        self.view_mode = ViewMode::Tree;
-        self.cursor = [0, 0, 0];
-        self.focused_col = Column::Todo;
-        self.tui_scroll_offset = 0;
-        self.clamp_all_cursors();
-    }
-
     pub fn fold_selected(&mut self) {
         if let Some(id) = self.selected_task_id(self.focused_col) {
             self.collapsed.insert(id);
@@ -226,6 +220,8 @@ impl App {
 
     /// Exit planning (tree) mode, restoring the saved kanban filter state.
     pub fn exit_planning(&mut self) {
+        self.last_tree_slots = self.active_slots;
+        self.last_tree_show_unc = self.show_unc;
         self.active_slots = self.saved_slots;
         self.show_unc = self.saved_show_unc;
         self.view_mode = ViewMode::Board;
@@ -234,9 +230,25 @@ impl App {
 
     /// Enter kanban (board) mode for the currently selected task in tree view,
     /// restoring saved filter state and placing the board cursor on that task.
+    /// If the selected task is a Todo leaf that wouldn't normally appear on the board,
+    /// it is forced into the Todo column for this kanban session.
     pub fn enter_kanban_for_selected(&mut self) {
         let task_info = self.selected_task_id(self.focused_col)
             .and_then(|id| self.task_ref(id).map(|t| (id, t.status.clone())));
+
+        // Save tree filter so Tab/Backspace in kanban can return here
+        self.last_tree_slots = self.active_slots;
+        self.last_tree_show_unc = self.show_unc;
+
+        // Force a non-first-leaf Todo task into the kanban Todo column
+        if let Some((id, Status::Todo)) = &task_info {
+            let id = *id;
+            if self.task_ref(id).map(|t| t.children.is_empty()).unwrap_or(false)
+                && !self.would_appear_in_todo_board_normally(id)
+            {
+                self.forced_todo_task_id = Some(id);
+            }
+        }
 
         self.active_slots = self.saved_slots;
         self.show_unc = self.saved_show_unc;
@@ -255,6 +267,67 @@ impl App {
         }
 
         self.clamp_all_cursors();
+    }
+
+    /// Enter tree mode restoring the last tree filter state (saved by exit_planning or
+    /// enter_kanban_for_selected). Used by Tab/Backspace in kanban.
+    /// If a forced Todo task was in play and has since moved to Doing, positions the
+    /// tree cursor on it so it is treated as the current task.
+    pub fn enter_planning_for_last_project(&mut self) {
+        self.saved_slots = self.active_slots;
+        self.saved_show_unc = self.show_unc;
+
+        self.active_slots = self.last_tree_slots;
+        self.show_unc = self.last_tree_show_unc;
+
+        self.view_mode = ViewMode::Tree;
+        self.cursor = [0, 0, 0];
+        self.tui_scroll_offset = 0;
+
+        let forced_id = self.forced_todo_task_id.take();
+        if let Some(id) = forced_id {
+            if let Some(task) = self.task_ref(id) {
+                let col = match task.status {
+                    Status::Todo => Column::Todo,
+                    Status::Doing => Column::Doing,
+                    Status::Done => Column::Done,
+                };
+                self.focused_col = col;
+                if let Some(pos) = self.visible_tasks_for(col).iter().position(|t| t.id == id) {
+                    self.cursor[Self::col_index(col)] = pos;
+                }
+            } else {
+                self.focused_col = Column::Todo;
+            }
+        } else {
+            self.focused_col = Column::Todo;
+        }
+
+        self.clamp_all_cursors();
+    }
+
+    /// Returns true if this Todo leaf task would appear in the Todo kanban column
+    /// under normal (non-forced) conditions.
+    fn would_appear_in_todo_board_normally(&self, task_id: Uuid) -> bool {
+        let task = match self.task_ref(task_id) {
+            Some(t) => t,
+            None => return false,
+        };
+        if task.status != Status::Todo || !task.children.is_empty() {
+            return false;
+        }
+        let project = task.project.clone();
+        // Project is hidden when it already has a Doing leaf task
+        if self.tasks.iter().any(|t| t.project == project && t.status == Status::Doing && t.children.is_empty()) {
+            return false;
+        }
+        // Only the first leaf in DFS order is shown per project
+        let dfs_pos = self.dfs_all_map();
+        let first_id = self.tasks.iter()
+            .filter(|t| t.project == project && t.status == Status::Todo && t.children.is_empty())
+            .min_by_key(|t| dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX))
+            .map(|t| t.id);
+        first_id == Some(task_id)
     }
 
     /// Cycle the active project in planning mode (exclusive single-project selection).
@@ -382,13 +455,26 @@ impl App {
                     let tree_key = dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX) as u64;
                     (pk, tree_key)
                 });
-                // Always show only first leaf per project; skip projects that already have a Doing task
+                // Always show only first leaf per project; skip projects that already have a Doing task.
+                // Exception: a forced task is always shown and replaces the normal first leaf for its project.
                 let doing_projects: HashSet<&str> = self.tasks.iter()
                     .filter(|t| t.status == Status::Doing && t.children.is_empty())
                     .map(|t| t.project.as_str())
                     .collect();
                 let mut seen: HashSet<String> = HashSet::new();
+                let forced_id = self.forced_todo_task_id;
+                // Pre-mark forced task's project so its natural first leaf is skipped
+                if let Some(fid) = forced_id {
+                    if let Some(ft) = self.task_ref(fid) {
+                        if ft.status == Status::Todo && ft.children.is_empty() {
+                            seen.insert(ft.project.clone());
+                        }
+                    }
+                }
                 tasks.retain(|t| {
+                    if forced_id == Some(t.id) {
+                        return true; // always keep the forced task regardless of project rules
+                    }
                     !doing_projects.contains(t.project.as_str()) && seen.insert(t.project.clone())
                 });
             }
