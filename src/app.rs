@@ -781,6 +781,31 @@ impl App {
 
     // ── Task movement ────────────────────────────────────────────────────────
 
+    /// Propagate derived status upward from `child_id`'s parent all the way to the root.
+    /// Each ancestor adopts the most-urgent status of its direct children:
+    /// Todo if any child is Todo, else Doing if any child is Doing, else Done.
+    fn propagate_status_up(&mut self, child_id: Uuid) {
+        let mut current = self.task_ref(child_id).and_then(|t| t.parent_id);
+        while let Some(pid) = current {
+            let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
+            let derived = if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Todo).unwrap_or(false)) {
+                Status::Todo
+            } else if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Doing).unwrap_or(false)) {
+                Status::Doing
+            } else {
+                Status::Done
+            };
+            if self.task_ref(pid).map(|t| t.status != derived).unwrap_or(false) {
+                if let Some(parent) = self.task_mut(pid) {
+                    parent.transition_to(derived);
+                }
+                current = self.task_ref(pid).and_then(|t| t.parent_id);
+            } else {
+                break;
+            }
+        }
+    }
+
     pub fn move_selected_right(&mut self) {
         let dest = self.focused_col.next();
         self.move_selected_to(dest);
@@ -795,32 +820,11 @@ impl App {
         let col = self.focused_col;
         if dest == col { return; }
         let Some(id) = self.selected_task_id(col) else { return; };
-        let parent_id = self.task_ref(id).and_then(|t| t.parent_id);
-        let _src_status = col.status();
         let new_status = dest.status();
         if let Some(task) = self.task_mut(id) {
-            task.transition_to(new_status.clone());
+            task.transition_to(new_status);
         }
-        // Propagate derived status all the way up to the root
-        let mut current_parent = parent_id;
-        while let Some(pid) = current_parent {
-            let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
-            let derived = if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Todo).unwrap_or(false)) {
-                Status::Todo
-            } else if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Doing).unwrap_or(false)) {
-                Status::Doing
-            } else {
-                Status::Done
-            };
-            if self.task_ref(pid).map(|t| t.status != derived).unwrap_or(false) {
-                if let Some(parent) = self.task_mut(pid) {
-                    parent.transition_to(derived);
-                }
-                current_parent = self.task_ref(pid).and_then(|t| t.parent_id);
-            } else {
-                break;
-            }
-        }
+        self.propagate_status_up(id);
         self.clamp_cursor(col);
         if let Some(pos) = self.nav_tasks_for(dest).iter().position(|t| t.id == id) {
             self.cursor[Self::col_index(dest)] = pos;
@@ -1284,6 +1288,8 @@ impl App {
             if let Some(new_pos) = visible.iter().position(|t| t.id == task_id) {
                 self.cursor[Self::col_index(col)] = new_pos;
             }
+            // Propagate up so a newly added Todo task un-Dones any completed ancestors
+            self.propagate_status_up(task_id);
         }
         self.mode = Mode::Normal;
     }
@@ -1469,8 +1475,12 @@ impl App {
             new_child_ids.push(task_id);
         }
 
+        let first_child_id = new_child_ids.first().copied();
         if let Some(parent) = self.task_mut(parent_id) {
             parent.children.extend(new_child_ids);
+        }
+        if let Some(cid) = first_child_id {
+            self.propagate_status_up(cid);
         }
 
         self.mode = Mode::Normal;
@@ -1998,6 +2008,30 @@ mod tests {
         app.commit_insert();
         assert!(app.tasks.is_empty());
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn commit_insert_propagates_todo_up_through_done_ancestors() {
+        // Bug: adding a new child to a completed (Done) family left parents as Done.
+        let mut parent = task("parent", "", Status::Done);
+        let done_child = task("done_child", "", Status::Done);
+        let parent_id = parent.id;
+        let _done_child_id = done_child.id;
+        let mut done_child2 = done_child.clone();
+        done_child2.parent_id = Some(parent_id);
+        parent.children.push(done_child2.id);
+        let mut app = App::new(vec![parent, done_child2], no_projects());
+        app.focused_col = Column::Done;
+        // Cursor on done_child inside the Done family
+        app.cursor[App::col_index(Column::Done)] = 0;
+        app.begin_insert_after();
+        app.insert.as_mut().unwrap().title = "new subtask".into();
+        // Ensure the insert will be a child of parent_id
+        app.insert.as_mut().unwrap().parent_id = Some(parent_id);
+        app.commit_insert();
+        // Parent must now reflect the new Todo child and become Todo itself
+        assert_eq!(app.task_ref(parent_id).unwrap().status, Status::Todo,
+            "parent should demote to Todo when a new Todo child is added to a Done family");
     }
 
     // ── set_project_recursive ─────────────────────────────────────────────────
