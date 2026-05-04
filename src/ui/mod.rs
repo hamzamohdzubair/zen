@@ -35,6 +35,32 @@ pub fn slot_key_char(slot: usize) -> char {
     if slot == 9 { '0' } else { (b'1' + slot as u8) as char }
 }
 
+/// Return the background color for flag `idx` (0-indexed).
+pub fn flag_color(idx: usize) -> Color {
+    match idx {
+        0 => Color::Indexed(68),  // cornflower blue  #5f87d7
+        1 => Color::Indexed(179), // warm gold        #d7af5f
+        2 => Color::Indexed(175), // dusty rose       #d787af
+        _ => Color::Reset,
+    }
+}
+
+/// Return the highlight color if the task has any active flag, otherwise `None`.
+pub fn flag_bg_for_task(task_flags: u8, flag_active: &[bool; 3]) -> Option<Color> {
+    (0..3).find(|&i| flag_active[i] && (task_flags >> i) & 1 == 1)
+          .map(flag_color)
+}
+
+pub fn flag_pill_span(idx: usize, active: bool) -> Span<'static> {
+    let color = flag_color(idx);
+    let style = if active {
+        Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
+    };
+    Span::styled(format!(" \u{2691}{} ", idx + 1), style)
+}
+
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
@@ -150,6 +176,14 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
                 let color = project_to_color(name);
                 spans.push(pill_span(key, name, count, app.active_slots[slot], color));
             }
+        }
+    }
+
+    // Flag pills — visible in all modes except project-edit and help
+    if !matches!(app.mode, Mode::ProjectEdit | Mode::Help) {
+        spans.push(Span::styled(SEP, sep_style));
+        for i in 0..3 {
+            spans.push(flag_pill_span(i, app.flag_active[i]));
         }
     }
 

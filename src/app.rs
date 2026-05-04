@@ -146,6 +146,12 @@ pub struct App {
     pub visual_anchor_id: Option<Uuid>,
     /// True while waiting for y/n confirmation before discarding unsaved insert/edit input.
     pub discard_confirm: bool,
+    /// Which of the three flag pills (0-indexed) are currently toggled on.
+    pub flag_active: [bool; 3],
+    /// The flag index (0-indexed) that 'f' will apply. Set to the most recently activated flag.
+    pub active_highlight: Option<usize>,
+    /// True while waiting for Enter/Esc confirmation before clearing all highlights of a flag.
+    pub flag_clear_confirm: bool,
 }
 
 impl App {
@@ -180,6 +186,9 @@ impl App {
             doing_order: Vec::new(),
             visual_anchor_id: None,
             discard_confirm: false,
+            flag_active: [false; 3],
+            active_highlight: None,
+            flag_clear_confirm: false,
         }
     }
 
@@ -1767,6 +1776,58 @@ impl App {
         state.parent_id = grandparent_id;
         state.project = project;
         state.position = InsertPosition::AfterSibling(parent_id);
+    }
+
+    // ── Flag highlights ──────────────────────────────────────────────────────
+
+    pub fn toggle_flag_pill(&mut self, idx: usize) {
+        self.flag_active[idx] = !self.flag_active[idx];
+        if self.flag_active[idx] {
+            self.active_highlight = Some(idx);
+        } else {
+            self.active_highlight = self.flag_active.iter().position(|&x| x);
+        }
+    }
+
+    /// Toggle the active flag on the currently selected task. Returns true if a change was made.
+    pub fn flag_selected_task(&mut self) -> bool {
+        let Some(flag_idx) = self.active_highlight else { return false; };
+        let col = self.focused_col;
+        let Some(id) = self.selected_task_id(col) else { return false; };
+        if let Some(task) = self.task_mut(id) {
+            task.flags ^= 1u8 << flag_idx;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn begin_flag_clear(&mut self) {
+        let active: Vec<usize> = (0..3).filter(|&i| self.flag_active[i]).collect();
+        if active.is_empty() { return; }
+        let nums: String = active.iter().map(|&i| (i + 1).to_string()).collect::<Vec<_>>().join(", ");
+        self.flag_clear_confirm = true;
+        self.status_message = Some(format!(
+            "Clear flag {} highlights? (Enter to confirm, Esc to cancel)", nums
+        ));
+    }
+
+    pub fn confirm_flag_clear(&mut self) {
+        for i in 0..3 {
+            if self.flag_active[i] {
+                let mask = !(1u8 << i);
+                for task in &mut self.tasks {
+                    task.flags &= mask;
+                }
+            }
+        }
+        self.flag_clear_confirm = false;
+        self.status_message = None;
+    }
+
+    pub fn cancel_flag_clear(&mut self) {
+        self.flag_clear_confirm = false;
+        self.status_message = None;
     }
 }
 

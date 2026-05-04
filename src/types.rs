@@ -36,6 +36,9 @@ pub struct Task {
     pub children: Vec<Uuid>,
     pub created_at: DateTime<Utc>,
     pub transitions: Vec<Transition>,
+    /// Bitmask of flag membership: bit 0 = flag 1, bit 1 = flag 2, bit 2 = flag 3.
+    #[serde(default)]
+    pub flags: u8,
 }
 
 impl Task {
@@ -49,6 +52,7 @@ impl Task {
             children: Vec::new(),
             created_at: Utc::now(),
             transitions: Vec::new(),
+            flags: 0,
         }
     }
 

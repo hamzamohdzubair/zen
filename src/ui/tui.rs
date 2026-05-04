@@ -369,6 +369,14 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let is_selected = selected_id == Some(row.id);
         let is_editing = app.mode == Mode::Insert
             && app.edit.as_ref().map(|es| es.task_id == row.id).unwrap_or(false);
+
+        let flag_bg = if !is_inline {
+            let task_flags = app.tasks.iter().find(|t| t.id == row.id).map(|t| t.flags).unwrap_or(0);
+            super::flag_bg_for_task(task_flags, &app.flag_active)
+        } else {
+            None
+        };
+
         let bg = if is_editing {
             Some(Color::Green)
         } else if !visual_ids.is_empty() && visual_ids.contains(&row.id) {
@@ -376,7 +384,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         } else if is_selected {
             Some(Color::Indexed(238))
         } else {
-            None
+            flag_bg
         };
         let ms = if let Some(bg) = bg { meta_style.bg(bg) } else { meta_style };
 
@@ -400,8 +408,15 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let mut title_style = title_style_for(row.kind);
         if is_editing {
             title_style = title_style.bg(Color::Green).fg(Color::Black);
-        } else if let Some(bg) = bg {
-            title_style = title_style.bg(bg);
+        } else if let Some(bg_color) = bg {
+            title_style = title_style.bg(bg_color);
+            // When the flag background is active (not selection/visual/edit), adjust text contrast
+            if flag_bg.is_some() && bg == flag_bg {
+                title_style = match row.kind {
+                    RowKind::Done => title_style.fg(Color::Indexed(236)), // darker for strikethrough
+                    _ => title_style.fg(Color::Indexed(255)),             // lighter for active tasks
+                };
+            }
         }
 
         let mut spans: Vec<Span> = Vec::new();
@@ -413,8 +428,12 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             let ns = if is_next {
                 let s = Style::default().fg(Color::Indexed(77)).add_modifier(Modifier::BOLD);
                 if let Some(bg) = bg { s.bg(bg) } else { s }
-            } else if let Some(bg) = bg {
-                num_style.bg(bg)
+            } else if let Some(bg_color) = bg {
+                if flag_bg.is_some() && bg == flag_bg {
+                    Style::default().fg(Color::Indexed(238)).bg(bg_color)
+                } else {
+                    num_style.bg(bg_color)
+                }
             } else {
                 num_style
             };

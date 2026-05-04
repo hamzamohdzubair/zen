@@ -29,6 +29,19 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
 }
 
 fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
+    if app.flag_clear_confirm {
+        match key.code {
+            KeyCode::Enter => {
+                app.confirm_flag_clear();
+                return AppAction::Save;
+            }
+            _ => {
+                app.cancel_flag_clear();
+                return AppAction::None;
+            }
+        }
+    }
+
     // Keys that work in both planning and action mode
     match key.code {
         KeyCode::Char('q') => return AppAction::Quit,
@@ -55,6 +68,17 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('-') => app.disable_all(),
         KeyCode::Char('P') => app.begin_project_edit(),
         KeyCode::Char('?') => app.mode = Mode::Help,
+
+        // Flag highlight keys — work in both tree and board view
+        KeyCode::Char('!') => app.toggle_flag_pill(0),
+        KeyCode::Char('@') => app.toggle_flag_pill(1),
+        KeyCode::Char('#') => app.toggle_flag_pill(2),
+        KeyCode::Char('f') => {
+            if app.flag_selected_task() {
+                return AppAction::Save;
+            }
+        }
+        KeyCode::Char('F') => app.begin_flag_clear(),
 
         _ => return match app.view_mode {
             ViewMode::Board => handle_action_keys(app, key),
