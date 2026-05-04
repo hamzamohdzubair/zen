@@ -1,6 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{App, BulkInsertStep, Column, Mode, ViewMode};
+use crate::types::Status;
+use crate::ui::tui;
 
 pub enum AppAction {
     Quit,
@@ -22,6 +24,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::ProjectEdit => handle_project_edit(app, key),
         Mode::Help => handle_help(app, key),
         Mode::BulkInsert => handle_bulk_insert(app, key),
+        Mode::Visual => handle_visual_keys(app, key),
     }
 }
 
@@ -138,9 +141,13 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
             }
         }
 
-        // Undo
+        // Undo / Redo
         KeyCode::Char('u') => {
             app.undo();
+            return AppAction::Save;
+        }
+        KeyCode::Char('r') => {
+            app.redo();
             return AppAction::Save;
         }
 
@@ -160,9 +167,106 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         // Bulk insert children
         KeyCode::Char('A') => app.begin_bulk_insert(),
 
+        // Toggle task status (Doing / Done)
+        KeyCode::Char('s') => {
+            app.tree_toggle_doing();
+            return AppAction::Save;
+        }
+        KeyCode::Char('x') => {
+            app.tree_toggle_done();
+            return AppAction::Save;
+        }
+
+        // Enter visual (multi-select) mode
+        KeyCode::Char('V') => app.enter_visual(),
+
+        // Jump to first / last row
+        KeyCode::Char('g') => {
+            if app.consume_gg() {
+                tui::tree_goto_first(app);
+            }
+        }
+        KeyCode::Char('G') => tui::tree_goto_last(app),
+
+        // Jump to prev / next root task
+        KeyCode::Char('[') => tui::tree_jump_prev_root(app),
+        KeyCode::Char(']') => tui::tree_jump_next_root(app),
+
         // Fold / unfold branch
         KeyCode::Char('h') => app.fold_selected(),
         KeyCode::Char('l') => app.toggle_fold_selected(),
+
+        _ => {}
+    }
+    AppAction::None
+}
+
+fn handle_visual_keys(app: &mut App, key: KeyEvent) -> AppAction {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('V') => app.exit_visual(),
+
+        KeyCode::Char('K') => {
+            let ids = tui::visual_selected_ids(app);
+            if !ids.is_empty() {
+                app.push_undo();
+                app.visual_shift_up(&ids);
+            }
+            return AppAction::Save;
+        }
+        KeyCode::Char('J') => {
+            let ids = tui::visual_selected_ids(app);
+            if !ids.is_empty() {
+                app.push_undo();
+                app.visual_shift_down(&ids);
+            }
+            return AppAction::Save;
+        }
+
+        KeyCode::Char('d') => {
+            let ids = tui::visual_selected_ids(app);
+            if !ids.is_empty() {
+                app.push_undo();
+                app.visual_delete(ids);
+            }
+            app.exit_visual();
+            return AppAction::Save;
+        }
+
+        KeyCode::Char('s') => {
+            let ids = tui::visual_selected_ids(app);
+            if !ids.is_empty() {
+                let all_doing = ids.iter().all(|&id| {
+                    app.task_ref(id).map(|t| t.status == Status::Doing).unwrap_or(false)
+                });
+                let new_status = if all_doing { Status::Todo } else { Status::Doing };
+                app.push_undo();
+                app.visual_apply_status(&ids, new_status);
+            }
+            app.exit_visual();
+            return AppAction::Save;
+        }
+
+        KeyCode::Char('x') => {
+            let ids = tui::visual_selected_ids(app);
+            if !ids.is_empty() {
+                let all_done = ids.iter().all(|&id| {
+                    app.task_ref(id).map(|t| t.status == Status::Done).unwrap_or(false)
+                });
+                let new_status = if all_done { Status::Todo } else { Status::Done };
+                app.push_undo();
+                app.visual_apply_status(&ids, new_status);
+            }
+            app.exit_visual();
+            return AppAction::Save;
+        }
+
+        // Extend selection to first / last row
+        KeyCode::Char('g') => { if app.consume_gg() { tui::tree_goto_first(app); } }
+        KeyCode::Char('G') => tui::tree_goto_last(app),
+
+        // Extend selection to prev / next root
+        KeyCode::Char('[') => tui::tree_jump_prev_root(app),
+        KeyCode::Char(']') => tui::tree_jump_next_root(app),
 
         _ => {}
     }

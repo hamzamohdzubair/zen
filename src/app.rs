@@ -12,6 +12,7 @@ pub enum Mode {
     ProjectEdit,
     Help,
     BulkInsert,
+    Visual,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,11 +134,16 @@ pub struct App {
     pub bulk_insert: Option<BulkInsertState>,
     pub status_message: Option<String>,
     pub last_d_press: Option<Instant>,
+    pub last_g_press: Option<Instant>,
     pub collapsed: HashSet<Uuid>,
     pub undo_stack: Vec<Vec<Task>>,
+    pub redo_stack: Vec<Vec<Task>>,
     /// Explicit ordering for the Doing kanban column, independent of tree structure.
     /// Empty means fall back to DFS order. Populated on first K/J swap.
     pub doing_order: Vec<Uuid>,
+    /// Anchor task for visual (multi-select) mode. The selection spans from this task
+    /// to the current cursor position in DFS row order.
+    pub visual_anchor_id: Option<Uuid>,
 }
 
 impl App {
@@ -165,9 +171,12 @@ impl App {
             bulk_insert: None,
             status_message: None,
             last_d_press: None,
+            last_g_press: None,
             collapsed: HashSet::new(),
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             doing_order: Vec::new(),
+            visual_anchor_id: None,
         }
     }
 
@@ -230,6 +239,161 @@ impl App {
         self.show_unc = self.saved_show_unc;
         self.view_mode = ViewMode::Board;
         self.clamp_all_cursors();
+    }
+
+    // ── Visual (multi-select) mode ───────────────────────────────────────────
+
+    pub fn enter_visual(&mut self) {
+        self.visual_anchor_id = self.selected_task_id(self.focused_col);
+        self.mode = Mode::Visual;
+    }
+
+    pub fn exit_visual(&mut self) {
+        self.visual_anchor_id = None;
+        self.mode = Mode::Normal;
+    }
+
+    /// Set `status` on every task in `ids`, propagating upward for each.
+    pub fn visual_apply_status(&mut self, ids: &[Uuid], status: Status) {
+        for &id in ids {
+            if let Some(task) = self.task_mut(id) {
+                task.transition_to(status.clone());
+            }
+            self.propagate_status_up(id);
+        }
+        let new_col = match status {
+            Status::Todo => Column::Todo,
+            Status::Doing => Column::Doing,
+            Status::Done => Column::Done,
+        };
+        self.focused_col = new_col;
+        self.clamp_all_cursors();
+    }
+
+    /// Move the selected block one position up (past the preceding sibling).
+    /// All `ids` must share the same parent and be contiguous in the children list.
+    pub fn visual_shift_up(&mut self, ids: &[Uuid]) {
+        if ids.is_empty() { return; }
+        let cursor_id = self.selected_task_id(self.focused_col);
+        let common_parent = self.task_ref(ids[0]).and_then(|t| t.parent_id);
+        if ids.iter().any(|&id| self.task_ref(id).and_then(|t| t.parent_id) != common_parent) {
+            return;
+        }
+        match common_parent {
+            Some(pid) => {
+                let children = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
+                let mut positions: Vec<usize> = ids.iter()
+                    .filter_map(|&id| children.iter().position(|&c| c == id))
+                    .collect();
+                if positions.len() != ids.len() { return; }
+                positions.sort_unstable();
+                for w in positions.windows(2) { if w[1] != w[0] + 1 { return; } }
+                let first = positions[0];
+                if first == 0 { return; }
+                let last = *positions.last().unwrap();
+                if let Some(parent) = self.task_mut(pid) {
+                    // Remove the sibling just above the block and re-insert it after the block.
+                    let moving = parent.children.remove(first - 1);
+                    parent.children.insert(last, moving);
+                }
+            }
+            None => {
+                let root_ids: Vec<Uuid> = self.tasks.iter()
+                    .filter(|t| t.parent_id.is_none()).map(|t| t.id).collect();
+                let mut positions: Vec<usize> = ids.iter()
+                    .filter_map(|&id| root_ids.iter().position(|&r| r == id))
+                    .collect();
+                if positions.len() != ids.len() { return; }
+                positions.sort_unstable();
+                for w in positions.windows(2) { if w[1] != w[0] + 1 { return; } }
+                let first = positions[0];
+                if first == 0 { return; }
+                let last = *positions.last().unwrap();
+                let prev_root = root_ids[first - 1];
+                let last_root = root_ids[last];
+                let prev_idx = self.tasks.iter().position(|t| t.id == prev_root).unwrap();
+                let last_idx = self.tasks.iter().position(|t| t.id == last_root).unwrap();
+                // Remove prev_root and insert it after last_root.
+                let task = self.tasks.remove(prev_idx);
+                self.tasks.insert(last_idx, task);
+            }
+        }
+        let col = self.focused_col;
+        if let Some(cid) = cursor_id {
+            let visible = self.visible_tasks_for(col);
+            if let Some(pos) = visible.iter().position(|t| t.id == cid) {
+                self.cursor[Self::col_index(col)] = pos;
+            }
+        }
+    }
+
+    /// Move the selected block one position down (past the following sibling).
+    /// All `ids` must share the same parent and be contiguous in the children list.
+    pub fn visual_shift_down(&mut self, ids: &[Uuid]) {
+        if ids.is_empty() { return; }
+        let cursor_id = self.selected_task_id(self.focused_col);
+        let common_parent = self.task_ref(ids[0]).and_then(|t| t.parent_id);
+        if ids.iter().any(|&id| self.task_ref(id).and_then(|t| t.parent_id) != common_parent) {
+            return;
+        }
+        match common_parent {
+            Some(pid) => {
+                let children = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
+                let mut positions: Vec<usize> = ids.iter()
+                    .filter_map(|&id| children.iter().position(|&c| c == id))
+                    .collect();
+                if positions.len() != ids.len() { return; }
+                positions.sort_unstable();
+                for w in positions.windows(2) { if w[1] != w[0] + 1 { return; } }
+                let last = *positions.last().unwrap();
+                if last + 1 >= children.len() { return; }
+                let first = positions[0];
+                if let Some(parent) = self.task_mut(pid) {
+                    // Remove the sibling just below the block and re-insert it before the block.
+                    let moving = parent.children.remove(last + 1);
+                    parent.children.insert(first, moving);
+                }
+            }
+            None => {
+                let root_ids: Vec<Uuid> = self.tasks.iter()
+                    .filter(|t| t.parent_id.is_none()).map(|t| t.id).collect();
+                let mut positions: Vec<usize> = ids.iter()
+                    .filter_map(|&id| root_ids.iter().position(|&r| r == id))
+                    .collect();
+                if positions.len() != ids.len() { return; }
+                positions.sort_unstable();
+                for w in positions.windows(2) { if w[1] != w[0] + 1 { return; } }
+                let last = *positions.last().unwrap();
+                if last + 1 >= root_ids.len() { return; }
+                let first = positions[0];
+                let next_root = root_ids[last + 1];
+                let first_root = root_ids[first];
+                let next_idx = self.tasks.iter().position(|t| t.id == next_root).unwrap();
+                let first_idx = self.tasks.iter().position(|t| t.id == first_root).unwrap();
+                // Remove next_root and insert it before first_root.
+                let task = self.tasks.remove(next_idx);
+                self.tasks.insert(first_idx, task);
+            }
+        }
+        let col = self.focused_col;
+        if let Some(cid) = cursor_id {
+            let visible = self.visible_tasks_for(col);
+            if let Some(pos) = visible.iter().position(|t| t.id == cid) {
+                self.cursor[Self::col_index(col)] = pos;
+            }
+        }
+    }
+
+    /// Delete all tasks in `ids` (skipping any already removed), then clamp cursors.
+    pub fn visual_delete(&mut self, ids: Vec<Uuid>) {
+        let count = ids.len();
+        for id in ids {
+            if self.task_ref(id).is_some() {
+                self.delete_task(id);
+            }
+        }
+        self.clamp_all_cursors();
+        self.status_message = Some(format!("Deleted {} tasks", count));
     }
 
     /// Enter kanban (board) mode for the currently selected task in tree view,
@@ -821,6 +985,40 @@ impl App {
         self.focused_col = dest;
     }
 
+    /// Toggle the selected task's status between Doing and Todo (tree view).
+    pub fn tree_toggle_doing(&mut self) {
+        let Some(id) = self.selected_task_id(self.focused_col) else { return; };
+        let current = self.task_ref(id).map(|t| t.status.clone()).unwrap_or(Status::Todo);
+        let new_status = if current == Status::Doing { Status::Todo } else { Status::Doing };
+        self.tree_set_status(id, new_status);
+    }
+
+    /// Toggle the selected task's status between Done and Todo (tree view).
+    pub fn tree_toggle_done(&mut self) {
+        let Some(id) = self.selected_task_id(self.focused_col) else { return; };
+        let current = self.task_ref(id).map(|t| t.status.clone()).unwrap_or(Status::Todo);
+        let new_status = if current == Status::Done { Status::Todo } else { Status::Done };
+        self.tree_set_status(id, new_status);
+    }
+
+    fn tree_set_status(&mut self, id: Uuid, new_status: Status) {
+        let old_col = self.focused_col;
+        let new_col = match new_status {
+            Status::Todo => Column::Todo,
+            Status::Doing => Column::Doing,
+            Status::Done => Column::Done,
+        };
+        if let Some(task) = self.task_mut(id) {
+            task.transition_to(new_status);
+        }
+        self.propagate_status_up(id);
+        self.clamp_cursor(old_col);
+        if let Some(pos) = self.visible_tasks_for(new_col).iter().position(|t| t.id == id) {
+            self.cursor[Self::col_index(new_col)] = pos;
+        }
+        self.focused_col = new_col;
+    }
+
     /// Returns all visible task IDs in DFS preorder (same order as the tree display).
     fn dfs_visible_ids(&self) -> Vec<Uuid> {
         let visible_ids: HashSet<Uuid> = self.tasks.iter()
@@ -873,34 +1071,37 @@ impl App {
     /// Move selected task one visual row up in the DFS tree, reparenting if needed.
     pub fn tree_swap_up(&mut self) {
         self.push_undo();
-        let dfs = self.dfs_visible_ids();
         let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
-        let i = match dfs.iter().position(|&id| id == task_id) {
-            Some(p) => p,
-            None => return,
-        };
-        if i == 0 { return; }
-
-        let prev_id = dfs[i - 1];
         let task_parent = self.task_ref(task_id).and_then(|t| t.parent_id);
-        // prev is task's parent: don't promote via K (use < for that)
-        if task_parent == Some(prev_id) { return; }
 
-        let prev_parent = self.task_ref(prev_id).and_then(|t| t.parent_id);
-
-        if task_parent != prev_parent {
-            return;
-        }
-        // Same parent: simple sibling swap
-        if let Some(pid) = task_parent {
-            if let Some(parent) = self.task_mut(pid) {
-                let pos = parent.children.iter().position(|&c| c == task_id).unwrap();
-                parent.children.swap(pos, pos - 1);
+        match task_parent {
+            Some(pid) => {
+                let children = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
+                let pos = match children.iter().position(|&c| c == task_id) {
+                    Some(p) => p,
+                    None => return,
+                };
+                if pos == 0 { return; }
+                if let Some(parent) = self.task_mut(pid) {
+                    parent.children.swap(pos, pos - 1);
+                }
             }
-        } else {
-            let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
-            let prev_idx = self.tasks.iter().position(|t| t.id == prev_id).unwrap();
-            self.tasks.swap(cur_idx, prev_idx);
+            None => {
+                // Root-level: find previous root sibling in self.tasks order
+                let root_ids: Vec<Uuid> = self.tasks.iter()
+                    .filter(|t| t.parent_id.is_none())
+                    .map(|t| t.id)
+                    .collect();
+                let pos = match root_ids.iter().position(|&id| id == task_id) {
+                    Some(p) => p,
+                    None => return,
+                };
+                if pos == 0 { return; }
+                let prev_id = root_ids[pos - 1];
+                let cur_idx = self.tasks.iter().position(|t| t.id == task_id).unwrap();
+                let prev_idx = self.tasks.iter().position(|t| t.id == prev_id).unwrap();
+                self.tasks.swap(cur_idx, prev_idx);
+            }
         }
 
         let col = self.focused_col;
@@ -1064,13 +1265,24 @@ impl App {
         if self.undo_stack.len() > 50 {
             self.undo_stack.remove(0);
         }
+        self.redo_stack.clear();
     }
 
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack.push(self.tasks.clone());
             self.tasks = prev;
             self.clamp_all_cursors();
             self.status_message = Some("Undo".into());
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.tasks.clone());
+            self.tasks = next;
+            self.clamp_all_cursors();
+            self.status_message = Some("Redo".into());
         }
     }
 
@@ -1096,6 +1308,17 @@ impl App {
         self.tasks.retain(|t| t.id != id);
         self.clamp_cursor(self.focused_col);
         self.status_message = Some("Deleted".into());
+    }
+
+    /// Handle the `gg` double-keypress pattern. Returns true on the second press.
+    pub fn consume_gg(&mut self) -> bool {
+        let now = Instant::now();
+        let double = self.last_g_press
+            .take()
+            .map(|t| t.elapsed().as_millis() < 500)
+            .unwrap_or(false);
+        if !double { self.last_g_press = Some(now); }
+        double
     }
 
     /// Handle the `dd` double-keypress pattern. Returns true if the delete fired.
