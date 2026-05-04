@@ -135,6 +135,9 @@ pub struct App {
     pub last_d_press: Option<Instant>,
     pub collapsed: HashSet<Uuid>,
     pub undo_stack: Vec<Vec<Task>>,
+    /// Explicit ordering for the Doing kanban column, independent of tree structure.
+    /// Empty means fall back to DFS order. Populated on first K/J swap.
+    pub doing_order: Vec<Uuid>,
 }
 
 impl App {
@@ -164,6 +167,7 @@ impl App {
             last_d_press: None,
             collapsed: HashSet::new(),
             undo_stack: Vec::new(),
+            doing_order: Vec::new(),
         }
     }
 
@@ -431,6 +435,16 @@ impl App {
             Column::Doing => {
                 let dfs_pos = self.dfs_all_map();
                 tasks.sort_by_key(|t| dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX));
+                if !self.doing_order.is_empty() {
+                    let ordered: Vec<Uuid> = self.doing_order.iter()
+                        .filter(|&&id| tasks.iter().any(|t| t.id == id))
+                        .copied()
+                        .collect();
+                    tasks.sort_by_key(|t| {
+                        ordered.iter().position(|&id| id == t.id)
+                            .unwrap_or(ordered.len() + dfs_pos.get(&t.id).copied().unwrap_or(usize::MAX))
+                    });
+                }
             }
             Column::Todo => {
                 let dfs_pos = self.dfs_all_map();
@@ -596,53 +610,21 @@ impl App {
         self.clamp_all_cursors();
     }
 
-    /// Swap two tasks' positions in the DFS tree (both must be leaves).
-    fn swap_dfs_positions(&mut self, id_a: Uuid, id_b: Uuid) {
-        if id_a == id_b { return; }
-        let parent_a = self.task_ref(id_a).and_then(|t| t.parent_id);
-        let parent_b = self.task_ref(id_b).and_then(|t| t.parent_id);
 
-        match (parent_a, parent_b) {
-            (Some(pid_a), Some(pid_b)) if pid_a == pid_b => {
-                // Same parent: swap positions in children array.
-                let pos_a = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_a)).unwrap();
-                let pos_b = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_b)).unwrap();
-                self.task_mut(pid_a).unwrap().children.swap(pos_a, pos_b);
-            }
-            (None, None) => {
-                // Both roots: swap positions in self.tasks.
-                let idx_a = self.tasks.iter().position(|t| t.id == id_a).unwrap();
-                let idx_b = self.tasks.iter().position(|t| t.id == id_b).unwrap();
-                self.tasks.swap(idx_a, idx_b);
-            }
-            (Some(pid_a), Some(pid_b)) => {
-                // Different non-root parents: swap children entries and update parent_ids.
-                let pos_a = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_a)).unwrap();
-                let pos_b = self.task_ref(pid_b).and_then(|p| p.children.iter().position(|&c| c == id_b)).unwrap();
-                self.task_mut(pid_a).unwrap().children[pos_a] = id_b;
-                self.task_mut(pid_b).unwrap().children[pos_b] = id_a;
-                self.task_mut(id_a).unwrap().parent_id = Some(pid_b);
-                self.task_mut(id_b).unwrap().parent_id = Some(pid_a);
-            }
-            (None, Some(pid_b)) => {
-                // id_a is root, id_b is non-root.
-                let pos_b = self.task_ref(pid_b).and_then(|p| p.children.iter().position(|&c| c == id_b)).unwrap();
-                self.task_mut(pid_b).unwrap().children[pos_b] = id_a;
-                self.task_mut(id_a).unwrap().parent_id = Some(pid_b);
-                self.task_mut(id_b).unwrap().parent_id = None;
-                let idx_a = self.tasks.iter().position(|t| t.id == id_a).unwrap();
-                let idx_b = self.tasks.iter().position(|t| t.id == id_b).unwrap();
-                self.tasks.swap(idx_a, idx_b);
-            }
-            (Some(pid_a), None) => {
-                // id_b is root, id_a is non-root.
-                let pos_a = self.task_ref(pid_a).and_then(|p| p.children.iter().position(|&c| c == id_a)).unwrap();
-                self.task_mut(pid_a).unwrap().children[pos_a] = id_b;
-                self.task_mut(id_b).unwrap().parent_id = Some(pid_a);
-                self.task_mut(id_a).unwrap().parent_id = None;
-                let idx_a = self.tasks.iter().position(|t| t.id == id_a).unwrap();
-                let idx_b = self.tasks.iter().position(|t| t.id == id_b).unwrap();
-                self.tasks.swap(idx_a, idx_b);
+    /// Sync doing_order to match the current set of Doing leaf tasks, preserving
+    /// any existing user-defined order and appending new tasks in DFS order.
+    fn sync_doing_order(&mut self) {
+        let dfs_pos = self.dfs_all_map();
+        let mut current: Vec<Uuid> = self.tasks.iter()
+            .filter(|t| t.status == Status::Doing && t.children.is_empty())
+            .map(|t| t.id)
+            .collect();
+        current.sort_by_key(|id| dfs_pos.get(id).copied().unwrap_or(usize::MAX));
+
+        self.doing_order.retain(|id| current.contains(id));
+        for id in &current {
+            if !self.doing_order.contains(id) {
+                self.doing_order.push(*id);
             }
         }
     }
@@ -664,7 +646,14 @@ impl App {
         let id_a = tasks[cur].id;
         let id_b = tasks[other].id;
         drop(tasks);
-        self.swap_dfs_positions(id_a, id_b);
+
+        self.sync_doing_order();
+        if let (Some(pos_a), Some(pos_b)) = (
+            self.doing_order.iter().position(|&id| id == id_a),
+            self.doing_order.iter().position(|&id| id == id_b),
+        ) {
+            self.doing_order.swap(pos_a, pos_b);
+        }
         self.cursor[Self::col_index(col)] = other;
     }
 
