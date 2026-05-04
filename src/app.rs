@@ -1159,7 +1159,7 @@ impl App {
             let project = self.default_project_for_insert();
             (None, project, InsertPosition::AtBeginning)
         };
-        let status = if col == Column::Done { Status::Todo } else { col.status() };
+        let status = Status::Todo;
         self.insert = Some(InsertState {
             title: String::new(),
             project,
@@ -1205,7 +1205,7 @@ impl App {
             }
         };
 
-        let status = if col == Column::Done { Status::Todo } else { col.status() };
+        let status = Status::Todo;
         self.insert = Some(InsertState {
             title: String::new(),
             project,
