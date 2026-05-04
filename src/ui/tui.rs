@@ -29,6 +29,29 @@ pub struct TuiRow {
     pub is_collapsed: bool,
 }
 
+/// Returns the task IDs covered by the current visual selection (anchor → cursor, inclusive).
+/// Ordered by DFS row position (top to bottom).
+pub fn visual_selected_ids(app: &App) -> Vec<Uuid> {
+    let anchor_id = match app.visual_anchor_id {
+        Some(id) => id,
+        None => return Vec::new(),
+    };
+    let rows = build_tui_rows(app);
+    let anchor_pos = match rows.iter().position(|r| r.id == anchor_id) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let cursor_pos = app.selected_task_id(app.focused_col)
+        .and_then(|id| rows.iter().position(|r| r.id == id))
+        .unwrap_or(anchor_pos);
+    let (lo, hi) = if anchor_pos <= cursor_pos {
+        (anchor_pos, cursor_pos)
+    } else {
+        (cursor_pos, anchor_pos)
+    };
+    rows[lo..=hi].iter().map(|r| r.id).collect()
+}
+
 pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
     let visible_ids: HashSet<Uuid> = app.tasks.iter()
         .filter(|t| app.task_visible(t))
@@ -112,6 +135,56 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
     }
 
     rows
+}
+
+fn navigate_to_row(app: &mut App, rows: &[TuiRow], pos: usize) {
+    let id = rows[pos].id;
+    if let Some(task) = app.task_ref(id) {
+        let col = match task.status {
+            Status::Todo => Column::Todo,
+            Status::Doing => Column::Doing,
+            Status::Done => Column::Done,
+        };
+        app.focused_col = col;
+        let col_tasks = app.visible_tasks_for(col);
+        if let Some(p) = col_tasks.iter().position(|t| t.id == id) {
+            app.cursor[App::col_index(col)] = p;
+        }
+    }
+}
+
+pub fn tree_goto_first(app: &mut App) {
+    let rows = build_tui_rows(app);
+    if !rows.is_empty() { navigate_to_row(app, &rows, 0); }
+}
+
+pub fn tree_goto_last(app: &mut App) {
+    let rows = build_tui_rows(app);
+    if let Some(last) = rows.len().checked_sub(1) { navigate_to_row(app, &rows, last); }
+}
+
+pub fn tree_jump_prev_root(app: &mut App) {
+    let rows = build_tui_rows(app);
+    if rows.is_empty() { return; }
+    let cur_pos = app.selected_task_id(app.focused_col)
+        .and_then(|id| rows.iter().position(|r| r.id == id))
+        .unwrap_or(0);
+    // Search backwards from one before current for a depth-0 row.
+    if let Some(p) = rows[..cur_pos].iter().rposition(|r| r.depth == 0) {
+        navigate_to_row(app, &rows, p);
+    }
+}
+
+pub fn tree_jump_next_root(app: &mut App) {
+    let rows = build_tui_rows(app);
+    if rows.is_empty() { return; }
+    let cur_pos = app.selected_task_id(app.focused_col)
+        .and_then(|id| rows.iter().position(|r| r.id == id))
+        .unwrap_or(0);
+    // Search forwards from one after current for a depth-0 row.
+    if let Some(rel) = rows[cur_pos + 1..].iter().position(|r| r.depth == 0) {
+        navigate_to_row(app, &rows, cur_pos + 1 + rel);
+    }
 }
 
 pub fn navigate_tree(app: &mut App, delta: i32) {
@@ -198,7 +271,7 @@ fn inline_insert_row(app: &App) -> Option<(usize, TuiRow)> {
         (0, String::new(), String::new())
     };
 
-    let title = format!("{}\u{2588}", state.title);
+    let title = state.title.clone();
     let kind = match state.status {
         Status::Todo => RowKind::Todo,
         Status::Doing => RowKind::Doing,
@@ -247,6 +320,12 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
     let meta_style = Style::default().fg(Color::Indexed(238));
     let num_style = Style::default().fg(Color::Indexed(245));
 
+    let visual_ids: HashSet<Uuid> = if matches!(app.mode, Mode::Visual) {
+        visual_selected_ids(app).into_iter().collect()
+    } else {
+        HashSet::new()
+    };
+
     // Find which visible row represents the "next" leaf task.
     // If the leaf is hidden behind a fold, bubble up to its nearest visible ancestor.
     let next_row_id: Option<Uuid> = app.first_visible_leaf_id().and_then(|leaf_id| {
@@ -292,6 +371,8 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             && app.edit.as_ref().map(|es| es.task_id == row.id).unwrap_or(false);
         let bg = if is_editing {
             Some(Color::Green)
+        } else if !visual_ids.is_empty() && visual_ids.contains(&row.id) {
+            Some(Color::Indexed(25))  // blue for visual selection
         } else if is_selected {
             Some(Color::Indexed(238))
         } else {
@@ -310,10 +391,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             + collapse_indicator.chars().count();
         let title_width = (area.width as usize).saturating_sub(prefix_chars);
         let raw_title = if is_editing {
-            let es = app.edit.as_ref().unwrap();
-            let mut chars: Vec<char> = es.title.chars().collect();
-            chars.insert(es.cursor_pos.min(chars.len()), '\u{2588}');
-            chars.into_iter().collect()
+            app.edit.as_ref().unwrap().title.clone()
         } else {
             row.title.clone()
         };
@@ -354,6 +432,21 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             Paragraph::new(Line::from(spans)).style(para_style),
             Rect { x: area.x, y, width: area.width, height: 1 },
         );
+
+        // Place the terminal cursor (bar style) without touching the rendered text.
+        if is_editing {
+            if let Some(es) = &app.edit {
+                let col = es.cursor_pos.min(es.title.chars().count()).min(title_width);
+                let cx = area.x.saturating_add(prefix_chars as u16).saturating_add(col as u16);
+                frame.set_cursor_position((cx, y));
+            }
+        } else if is_inline {
+            if let Some(ins) = &app.insert {
+                let col = ins.title.chars().count().min(title_width);
+                let cx = area.x.saturating_add(prefix_chars as u16).saturating_add(col as u16);
+                frame.set_cursor_position((cx, y));
+            }
+        }
 
         y += 1;
     }

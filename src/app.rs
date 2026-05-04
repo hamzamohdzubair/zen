@@ -144,6 +144,8 @@ pub struct App {
     /// Anchor task for visual (multi-select) mode. The selection spans from this task
     /// to the current cursor position in DFS row order.
     pub visual_anchor_id: Option<Uuid>,
+    /// True while waiting for y/n confirmation before discarding unsaved insert/edit input.
+    pub discard_confirm: bool,
 }
 
 impl App {
@@ -177,6 +179,7 @@ impl App {
             redo_stack: Vec::new(),
             doing_order: Vec::new(),
             visual_anchor_id: None,
+            discard_confirm: false,
         }
     }
 

@@ -70,6 +70,7 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Mode::ProjectEdit => "PROJ",
         Mode::Help => "HELP",
         Mode::BulkInsert => "BULK",
+        Mode::Visual => "VISUAL",
     };
 
     let sep_style = Style::default().fg(Color::Indexed(240));
@@ -180,5 +181,6 @@ fn mode_color(mode: &Mode) -> Color {
         Mode::ProjectEdit => Color::Magenta,
         Mode::Help => Color::Indexed(240),
         Mode::BulkInsert => Color::Indexed(208),
+        Mode::Visual => Color::Indexed(25),
     }
 }

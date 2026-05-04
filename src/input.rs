@@ -274,11 +274,35 @@ fn handle_visual_keys(app: &mut App, key: KeyEvent) -> AppAction {
 }
 
 fn handle_insert(app: &mut App, key: KeyEvent) -> AppAction {
+    if app.insert.is_none() {
+        return AppAction::None;
+    }
+
+    if app.discard_confirm {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.discard_confirm = false;
+                app.insert = None;
+                app.mode = Mode::Normal;
+            }
+            _ => {
+                app.discard_confirm = false;
+                app.status_message = None;
+            }
+        }
+        return AppAction::None;
+    }
+
     if let Some(ref mut state) = app.insert {
         match key.code {
             KeyCode::Esc => {
-                app.insert = None;
-                app.mode = Mode::Normal;
+                if state.title.is_empty() {
+                    app.insert = None;
+                    app.mode = Mode::Normal;
+                } else {
+                    app.discard_confirm = true;
+                    app.status_message = Some("Discard changes? (y/n)".to_string());
+                }
                 return AppAction::None;
             }
             KeyCode::Enter => {
@@ -311,11 +335,39 @@ fn handle_insert(app: &mut App, key: KeyEvent) -> AppAction {
 }
 
 fn handle_edit(app: &mut App, key: KeyEvent) -> AppAction {
+    if app.edit.is_none() {
+        return AppAction::None;
+    }
+
+    if app.discard_confirm {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.discard_confirm = false;
+                app.edit = None;
+                app.mode = Mode::Normal;
+            }
+            _ => {
+                app.discard_confirm = false;
+                app.status_message = None;
+            }
+        }
+        return AppAction::None;
+    }
+
     if let Some(ref mut state) = app.edit {
         match key.code {
             KeyCode::Esc => {
-                app.edit = None;
-                app.mode = Mode::Normal;
+                let title_changed = app.tasks.iter()
+                    .find(|t| t.id == state.task_id)
+                    .map(|t| t.title != state.title)
+                    .unwrap_or(false);
+                if title_changed {
+                    app.discard_confirm = true;
+                    app.status_message = Some("Discard changes? (y/n)".to_string());
+                } else {
+                    app.edit = None;
+                    app.mode = Mode::Normal;
+                }
                 return AppAction::None;
             }
             KeyCode::Enter => {

@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use crossterm::{
+    cursor,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -70,7 +71,7 @@ fn run_tui() -> io::Result<()> {
 fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, cursor::Hide, cursor::SetCursorStyle::SteadyBlock)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -85,8 +86,10 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
             if let Event::Key(key) = event::read()? {
                 app.status_message = None;
 
-                // In tree view normal mode, j/k drive tree navigation and scroll
-                if app.view_mode == ViewMode::Tree && app.mode == Mode::Normal {
+                // In tree view normal/visual mode, j/k drive tree navigation and scroll
+                if app.view_mode == ViewMode::Tree
+                    && matches!(app.mode, Mode::Normal | Mode::Visual)
+                {
                     let task_area_height =
                         (terminal.size()?.height as usize).saturating_sub(1);
                     match key.code {
@@ -128,7 +131,7 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
 fn run_done() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -159,7 +162,7 @@ fn run_done() -> io::Result<()> {
 fn run_stats() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -187,8 +190,7 @@ fn run_stats() -> io::Result<()> {
 
 fn cleanup_terminal(mut terminal: Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
-    terminal.show_cursor()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, cursor::SetCursorStyle::DefaultUserShape, cursor::Show)?;
     Ok(())
 }
 
