@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, BulkInsertStep, Column, Mode, ViewMode};
 use crate::types::Status;
@@ -7,10 +7,15 @@ use crate::ui::tui;
 pub enum AppAction {
     Quit,
     Save,
+    Snapshot,
+    SnapshotAndArchiveDone,
     None,
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
+    if matches!(app.mode, Mode::SnapBrowser) {
+        return handle_snap_browser(app, key);
+    }
     match &app.mode.clone() {
         Mode::Normal => handle_normal(app, key),
         Mode::Insert => {
@@ -25,6 +30,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::Help => handle_help(app, key),
         Mode::BulkInsert => handle_bulk_insert(app, key),
         Mode::Visual => handle_visual_keys(app, key),
+        Mode::SnapBrowser => AppAction::None, // handled above before the match
     }
 }
 
@@ -40,6 +46,26 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
                 return AppAction::None;
             }
         }
+    }
+
+    if app.archive_done_confirm {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                return AppAction::SnapshotAndArchiveDone;
+            }
+            _ => {
+                app.cancel_archive_done();
+                return AppAction::None;
+            }
+        }
+    }
+
+    // Ctrl+Shift+R / Ctrl+R: archive all Done tasks (snapshot auto-saved first)
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
+    {
+        app.begin_archive_done();
+        return AppAction::None;
     }
 
     // Keys that work in both planning and action mode
@@ -68,6 +94,13 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('-') => app.disable_all(),
         KeyCode::Char('P') => app.begin_project_edit(),
         KeyCode::Char('?') => app.mode = Mode::Help,
+
+        // Snapshot: S saves, Z opens the quick browser popup
+        KeyCode::Char('S') => return AppAction::Snapshot,
+        KeyCode::Char('Z') => {
+            app.open_snap_browser();
+            return AppAction::None;
+        }
 
         // Flag highlight keys — work in both tree and board view
         KeyCode::Char('!') => app.toggle_flag_pill(0),
@@ -551,3 +584,35 @@ fn handle_help(app: &mut App, key: KeyEvent) -> AppAction {
     AppAction::None
 }
 
+fn handle_snap_browser(app: &mut App, key: KeyEvent) -> AppAction {
+    let has_viewer = app.snap_popup.as_ref().map(|p| p.viewer.is_some()).unwrap_or(false);
+    if has_viewer {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                if let Some(p) = app.snap_popup.as_mut() { p.close_viewer(); }
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Some(p) = app.snap_popup.as_mut() { p.viewer_scroll_down(); }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Some(p) = app.snap_popup.as_mut() { p.viewer_scroll_up(); }
+            }
+            _ => {}
+        }
+    } else {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => app.close_snap_browser(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Some(p) = app.snap_popup.as_mut() { p.move_down(); }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Some(p) = app.snap_popup.as_mut() { p.move_up(); }
+            }
+            KeyCode::Enter => {
+                if let Some(p) = app.snap_popup.as_mut() { p.open_viewer(); }
+            }
+            _ => {}
+        }
+    }
+    AppAction::None
+}

@@ -1,5 +1,7 @@
 mod app;
+mod archive;
 mod input;
+mod snapshots;
 mod storage;
 mod types;
 mod ui;
@@ -19,6 +21,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use app::{App, Mode, ViewMode};
 use input::{AppAction, handle_key};
 use ui::done::DoneApp;
+use ui::snaps::{SnapsApp, compute_browser_scroll};
 use ui::stats::StatsApp;
 use ui::tui;
 
@@ -37,6 +40,8 @@ enum Command {
     Done,
     /// Show project statistics
     Stats,
+    /// Browse saved tree snapshots
+    Snaps,
     /// Export tasks as CSV to stdout
     Export {
         #[command(subcommand)]
@@ -59,6 +64,7 @@ fn main() -> io::Result<()> {
         Command::Tui => run_tui(),
         Command::Done => run_done(),
         Command::Stats => run_stats(),
+        Command::Snaps => run_snaps(),
         Command::Export { filter: None } => run_export_all(),
         Command::Export { filter: Some(ExportFilter::Done { .. }) } => run_export_done(),
     }
@@ -80,7 +86,7 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
     app.view_mode = initial_view;
 
     loop {
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -112,6 +118,25 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
                 match handle_key(&mut app, key) {
                     AppAction::Quit => break,
                     AppAction::Save => storage::save(&app.tasks, &app.projects),
+                    AppAction::Snapshot => {
+                        let snap = app.to_snapshot();
+                        app.status_message = Some(match snapshots::save_snapshot(&snap) {
+                            Some(_) => "Snapshot saved".into(),
+                            None => "Snapshot failed".into(),
+                        });
+                    }
+                    AppAction::SnapshotAndArchiveDone => {
+                        let snap = app.to_snapshot();
+                        snapshots::save_snapshot(&snap);
+                        let to_archive = app.collect_done_for_archive();
+                        if !to_archive.is_empty() {
+                            archive::append_tasks(&to_archive);
+                            let archived_ids: std::collections::HashSet<uuid::Uuid> =
+                                to_archive.iter().map(|t| t.id).collect();
+                            app.remove_archived_tasks(&archived_ids);
+                        }
+                        storage::save(&app.tasks, &app.projects);
+                    }
                     AppAction::None => {}
                 }
 
@@ -180,6 +205,64 @@ fn run_stats() -> io::Result<()> {
                     KeyCode::Char('j') | KeyCode::Down => app.move_down(),
                     KeyCode::Char('k') | KeyCode::Up => app.move_up(),
                     _ => {}
+                }
+            }
+        }
+    }
+
+    cleanup_terminal(terminal)
+}
+
+fn run_snaps() -> io::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = SnapsApp::new();
+
+    loop {
+        terminal.draw(|f| ui::snaps::draw_snaps(f, &mut app))?;
+
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                app.status_message = None;
+                let h = terminal.size()?.height as usize;
+                let area_height = h.saturating_sub(2);
+
+                if app.viewer.is_some() {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => app.close_viewer(),
+                        KeyCode::Char('j') | KeyCode::Down => app.viewer_scroll_down(),
+                        KeyCode::Char('k') | KeyCode::Up => app.viewer_scroll_up(),
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            app.move_down();
+                            app.scroll_offset =
+                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            app.move_up();
+                            app.scroll_offset =
+                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
+                        }
+                        KeyCode::Char('l') | KeyCode::Enter | KeyCode::Right => {
+                            app.toggle_or_open();
+                            app.scroll_offset =
+                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
+                        }
+                        KeyCode::Char('h') | KeyCode::Left => {
+                            app.collapse_current();
+                            app.scroll_offset =
+                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
+                        }
+                        _ => {}
+                    }
                 }
             }
         }

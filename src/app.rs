@@ -13,6 +13,7 @@ pub enum Mode {
     Help,
     BulkInsert,
     Visual,
+    SnapBrowser,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +153,10 @@ pub struct App {
     pub active_highlight: Option<usize>,
     /// True while waiting for Enter/Esc confirmation before clearing all highlights of a flag.
     pub flag_clear_confirm: bool,
+    /// True while waiting for confirmation before archiving all Done tasks.
+    pub archive_done_confirm: bool,
+    /// State for the in-TUI snapshot browser popup.
+    pub snap_popup: Option<crate::snapshots::SnapPopupState>,
 }
 
 impl App {
@@ -189,6 +194,8 @@ impl App {
             flag_active: [false; 3],
             active_highlight: None,
             flag_clear_confirm: false,
+            archive_done_confirm: false,
+            snap_popup: None,
         }
     }
 
@@ -1828,6 +1835,90 @@ impl App {
     pub fn cancel_flag_clear(&mut self) {
         self.flag_clear_confirm = false;
         self.status_message = None;
+    }
+
+    // ── Snapshots ─────────────────────────────────────────────────────────────
+
+    pub fn to_snapshot(&self) -> crate::snapshots::Snapshot {
+        crate::snapshots::Snapshot {
+            taken_at: chrono::Utc::now(),
+            tasks: self.tasks.clone(),
+            projects: self.projects.clone(),
+            active_slots: self.active_slots,
+            show_unc: self.show_unc,
+            collapsed: self.collapsed.iter().copied().collect(),
+        }
+    }
+
+    pub fn open_snap_browser(&mut self) {
+        self.snap_popup = Some(crate::snapshots::SnapPopupState::load());
+        self.mode = Mode::SnapBrowser;
+    }
+
+    pub fn close_snap_browser(&mut self) {
+        self.snap_popup = None;
+        self.mode = Mode::Normal;
+    }
+
+    // ── Archive Done ──────────────────────────────────────────────────────────
+
+    pub fn begin_archive_done(&mut self) {
+        self.archive_done_confirm = true;
+        self.status_message =
+            Some("Archive all Done tasks? (Enter to confirm, Esc to cancel)".into());
+    }
+
+    pub fn cancel_archive_done(&mut self) {
+        self.archive_done_confirm = false;
+        self.status_message = None;
+    }
+
+    /// Returns all Done tasks whose entire descendant subtree is also Done.
+    /// Only complete subtrees are archived so that tree relationships stay intact.
+    pub fn collect_done_for_archive(&self) -> Vec<Task> {
+        let tasks_by_id: HashMap<Uuid, &Task> =
+            self.tasks.iter().map(|t| (t.id, t)).collect();
+
+        fn fully_done(id: Uuid, tasks_by_id: &HashMap<Uuid, &Task>) -> bool {
+            match tasks_by_id.get(&id) {
+                Some(t) => {
+                    t.status == Status::Done
+                        && t.children.iter().all(|&cid| fully_done(cid, tasks_by_id))
+                }
+                None => true,
+            }
+        }
+
+        self.tasks
+            .iter()
+            .filter(|t| fully_done(t.id, &tasks_by_id))
+            .cloned()
+            .collect()
+    }
+
+    /// Removes the given task IDs from active state after they have been written
+    /// to the archive. Cleans up children lists and orphaned parent refs.
+    pub fn remove_archived_tasks(&mut self, archived_ids: &HashSet<Uuid>) {
+        if archived_ids.is_empty() {
+            return;
+        }
+        self.tasks.retain(|t| !archived_ids.contains(&t.id));
+        for task in &mut self.tasks {
+            task.children.retain(|cid| !archived_ids.contains(cid));
+            if let Some(pid) = task.parent_id {
+                if archived_ids.contains(&pid) {
+                    task.parent_id = None;
+                }
+            }
+        }
+        self.doing_order.retain(|id| !archived_ids.contains(id));
+        self.collapsed.retain(|id| !archived_ids.contains(id));
+        self.clamp_all_cursors();
+        self.status_message = Some(format!(
+            "Archived {} task{}",
+            archived_ids.len(),
+            if archived_ids.len() == 1 { "" } else { "s" }
+        ));
     }
 }
 

@@ -1,6 +1,7 @@
-mod board;
+pub(crate) mod board;
 mod help;
 pub mod done;
+pub mod snaps;
 pub mod stats;
 pub mod tui;
 
@@ -11,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, BulkInsertStep, KanbanSort, Mode, ViewMode};
+use snaps::draw_snap_popup;
 use board::project_to_color;
 
 pub fn pill_span(key: char, name: &str, count: usize, active: bool, color: Color) -> Span<'static> {
@@ -61,7 +63,7 @@ pub fn flag_pill_span(idx: usize, active: bool) -> Span<'static> {
     Span::styled(format!(" \u{2691}{} ", idx + 1), style)
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     let chunks = Layout::default()
@@ -81,6 +83,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if matches!(app.mode, Mode::Help) {
         help::draw_help(frame, app.view_mode);
     }
+
+    if let Some(ref mut popup) = app.snap_popup {
+        draw_snap_popup(frame, popup);
+    }
 }
 
 const SEP: &str = "│";
@@ -97,6 +103,7 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Help => "HELP",
         Mode::BulkInsert => "BULK",
         Mode::Visual => "VISUAL",
+        Mode::SnapBrowser => "SNAPS",
     };
 
     let sep_style = Style::default().fg(Color::Indexed(240));
@@ -216,5 +223,6 @@ fn mode_color(mode: &Mode) -> Color {
         Mode::Help => Color::Indexed(240),
         Mode::BulkInsert => Color::Indexed(208),
         Mode::Visual => Color::Indexed(25),
+        Mode::SnapBrowser => Color::Indexed(33),
     }
 }

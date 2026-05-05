@@ -52,6 +52,63 @@ pub fn visual_selected_ids(app: &App) -> Vec<Uuid> {
     rows[lo..=hi].iter().map(|r| r.id).collect()
 }
 
+fn visit_task(
+    id: Uuid,
+    depth: usize,
+    parent_children_prefix: &str,
+    is_last: bool,
+    visible_ids: &HashSet<Uuid>,
+    collapsed: &HashSet<Uuid>,
+    tasks_by_id: &HashMap<Uuid, &crate::types::Task>,
+    rows: &mut Vec<TuiRow>,
+) {
+    let task = match tasks_by_id.get(&id) {
+        Some(t) => t,
+        None => return,
+    };
+
+    let kind = match task.status {
+        Status::Done => RowKind::Done,
+        Status::Doing => RowKind::Doing,
+        Status::Todo => RowKind::Todo,
+    };
+
+    let (display_prefix, children_prefix) = if depth == 0 {
+        (String::new(), String::new())
+    } else {
+        let connector = if is_last { "╰─ " } else { "├─ " };
+        let child_cont = if is_last { "   " } else { "│  " };
+        (
+            format!("{}{}", parent_children_prefix, connector),
+            format!("{}{}", parent_children_prefix, child_cont),
+        )
+    };
+
+    let visible_children: Vec<Uuid> = task.children.iter()
+        .filter(|&&cid| visible_ids.contains(&cid))
+        .copied()
+        .collect();
+
+    let is_collapsed = collapsed.contains(&id) && !visible_children.is_empty();
+
+    rows.push(TuiRow {
+        id,
+        title: task.title.clone(),
+        depth,
+        kind,
+        display_prefix,
+        children_prefix: children_prefix.clone(),
+        is_collapsed,
+    });
+
+    if !is_collapsed {
+        let n = visible_children.len();
+        for (i, &cid) in visible_children.iter().enumerate() {
+            visit_task(cid, depth + 1, &children_prefix, i == n - 1, visible_ids, collapsed, tasks_by_id, rows);
+        }
+    }
+}
+
 pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
     let visible_ids: HashSet<Uuid> = app.tasks.iter()
         .filter(|t| app.task_visible(t))
@@ -71,69 +128,60 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
         .collect();
 
     let mut rows: Vec<TuiRow> = Vec::new();
-
-    fn visit(
-        id: Uuid,
-        depth: usize,
-        parent_children_prefix: &str,
-        is_last: bool,
-        visible_ids: &HashSet<Uuid>,
-        collapsed: &HashSet<Uuid>,
-        tasks_by_id: &HashMap<Uuid, &crate::types::Task>,
-        rows: &mut Vec<TuiRow>,
-    ) {
-        let task = match tasks_by_id.get(&id) {
-            Some(t) => t,
-            None => return,
-        };
-
-        let kind = match task.status {
-            Status::Done => RowKind::Done,
-            Status::Doing => RowKind::Doing,
-            Status::Todo => RowKind::Todo,
-        };
-
-        let (display_prefix, children_prefix) = if depth == 0 {
-            (String::new(), String::new())
-        } else {
-            let connector = if is_last { "╰─ " } else { "├─ " };
-            let child_cont = if is_last { "   " } else { "│  " };
-            (
-                format!("{}{}", parent_children_prefix, connector),
-                format!("{}{}", parent_children_prefix, child_cont),
-            )
-        };
-
-        let visible_children: Vec<Uuid> = task.children.iter()
-            .filter(|&&cid| visible_ids.contains(&cid))
-            .copied()
-            .collect();
-
-        let is_collapsed = collapsed.contains(&id) && !visible_children.is_empty();
-
-        rows.push(TuiRow {
-            id,
-            title: task.title.clone(),
-            depth,
-            kind,
-            display_prefix,
-            children_prefix: children_prefix.clone(),
-            is_collapsed,
-        });
-
-        if !is_collapsed {
-            let n = visible_children.len();
-            for (i, &cid) in visible_children.iter().enumerate() {
-                visit(cid, depth + 1, &children_prefix, i == n - 1, visible_ids, collapsed, tasks_by_id, rows);
-            }
-        }
-    }
-
     let n = roots.len();
     for (i, &root_id) in roots.iter().enumerate() {
-        visit(root_id, 0, "", i == n - 1, &visible_ids, &app.collapsed, &tasks_by_id, &mut rows);
+        visit_task(root_id, 0, "", i == n - 1, &visible_ids, &app.collapsed, &tasks_by_id, &mut rows);
     }
+    rows
+}
 
+/// Build tree rows from raw snapshot data, without needing a full App.
+/// Shows all tasks regardless of active_slots — snapshots are full historical records.
+pub fn build_rows_from(
+    tasks: &[crate::types::Task],
+    projects: &[Option<String>; 10],
+    collapsed: &HashSet<Uuid>,
+) -> Vec<TuiRow> {
+    let tasks_by_id: HashMap<Uuid, &crate::types::Task> = tasks.iter().map(|t| (t.id, t)).collect();
+
+    let slot_for = |project: &str| -> Option<usize> {
+        if project.is_empty() { return None; }
+        projects.iter().position(|p| p.as_deref() == Some(project))
+    };
+
+    // Show everything: unclassified tasks and all project slots
+    let visible_ids: HashSet<Uuid> = tasks.iter()
+        .filter(|t| t.project.is_empty() || slot_for(&t.project).is_some())
+        .map(|t| t.id)
+        .collect();
+
+    // Sort roots by project slot: inbox (empty) → slot 1..9 → slot 0
+    let slot_order = |proj: &str| -> usize {
+        if proj.is_empty() { return 0; }
+        match projects.iter().position(|p| p.as_deref() == Some(proj)) {
+            Some(9) => 10,  // key '0' (slot index 9) comes last
+            Some(s) => s + 1,
+            None => 11,
+        }
+    };
+
+    let mut roots: Vec<Uuid> = tasks.iter()
+        .filter(|t| {
+            visible_ids.contains(&t.id)
+                && t.parent_id.map(|pid| !visible_ids.contains(&pid)).unwrap_or(true)
+        })
+        .map(|t| t.id)
+        .collect();
+    roots.sort_by_key(|&id| {
+        let proj = tasks_by_id.get(&id).map(|t| t.project.as_str()).unwrap_or("");
+        slot_order(proj)
+    });
+
+    let mut rows: Vec<TuiRow> = Vec::new();
+    let n = roots.len();
+    for (i, &root_id) in roots.iter().enumerate() {
+        visit_task(root_id, 0, "", i == n - 1, &visible_ids, collapsed, &tasks_by_id, &mut rows);
+    }
     rows
 }
 
