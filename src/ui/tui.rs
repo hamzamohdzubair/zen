@@ -213,17 +213,26 @@ pub fn navigate_tree(app: &mut App, delta: i32) {
 }
 
 pub fn compute_scroll(app: &App, current_scroll: usize, task_area_height: usize) -> usize {
+    const SCROLLOFF: usize = 6;
     let rows = build_tui_rows(app);
-    let sel_id = app.selected_task_id(app.focused_col);
-    let sel_idx = sel_id
-        .and_then(|id| rows.iter().position(|r| r.id == id))
-        .unwrap_or(0);
-    if sel_idx < current_scroll {
-        sel_idx
-    } else if task_area_height > 0 && sel_idx >= current_scroll + task_area_height {
-        sel_idx.saturating_sub(task_area_height.saturating_sub(1))
+    let sel_idx = if app.insert.is_some() {
+        // Inserting a new task: scroll to keep the inline input row visible.
+        inline_insert_row(app).map(|(idx, _)| idx).unwrap_or(0)
     } else {
-        current_scroll
+        app.selected_task_id(app.focused_col)
+            .and_then(|id| rows.iter().position(|r| r.id == id))
+            .unwrap_or(0)
+    };
+    if task_area_height == 0 {
+        return 0;
+    }
+    // Clamp scroll so the cursor stays at least SCROLLOFF rows from each edge.
+    let min_scroll = (sel_idx + SCROLLOFF + 1).saturating_sub(task_area_height);
+    let max_scroll = sel_idx.saturating_sub(SCROLLOFF);
+    if min_scroll > max_scroll {
+        min_scroll
+    } else {
+        current_scroll.clamp(min_scroll, max_scroll)
     }
 }
 
@@ -362,6 +371,9 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         depth_counters.last().map(|n| n.to_string()).unwrap_or_default()
     }).collect();
 
+    let tasks_by_id: HashMap<Uuid, &crate::types::Task> =
+        app.tasks.iter().map(|t| (t.id, t)).collect();
+
     let mut y = area.y;
     for (row_idx, row) in rows.iter().enumerate().skip(scroll_offset).take(area.height as usize) {
         let is_inline = row.id == Uuid::nil();
@@ -397,7 +409,32 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let prefix_chars = row.display_prefix.chars().count()
             + num_str.chars().count()
             + collapse_indicator.chars().count();
-        let title_width = (area.width as usize).saturating_sub(prefix_chars);
+
+        // Progress bar (●/○): one circle per direct visible child.
+        let progress_bar: Option<(String, String)> = if !is_inline && !is_editing {
+            if let Some(task) = tasks_by_id.get(&row.id) {
+                let total = task.children.iter()
+                    .filter(|&&cid| tasks_by_id.get(&cid).map(|t| app.task_visible(*t)).unwrap_or(false))
+                    .count();
+                if total > 0 {
+                    let done = task.children.iter()
+                        .filter(|&&cid| tasks_by_id.get(&cid)
+                            .map(|t| app.task_visible(*t) && t.status == Status::Done)
+                            .unwrap_or(false))
+                        .count();
+                    Some(("●".repeat(done), "○".repeat(total - done)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let bar_reserve = progress_bar.as_ref().map(|(f, e)| f.len() + e.len() + 1).unwrap_or(0);
+        let title_width = (area.width as usize).saturating_sub(prefix_chars + bar_reserve);
         let raw_title = if is_editing {
             app.edit.as_ref().unwrap().title.clone()
         } else {
@@ -445,6 +482,12 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             spans.push(Span::styled(collapse_indicator, cs));
         }
         spans.push(Span::styled(title_text, title_style));
+
+        if let Some((filled, empty)) = progress_bar {
+            let bar_style = Style::default().fg(Color::Indexed(110));
+            let bar_style = if let Some(c) = bg { bar_style.bg(c) } else { bar_style };
+            spans.push(Span::styled(format!(" {}{}", filled, empty), bar_style));
+        }
 
         let para_style = if let Some(bg) = bg { Style::default().bg(bg) } else { Style::default() };
         frame.render_widget(
