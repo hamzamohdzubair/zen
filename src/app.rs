@@ -161,6 +161,11 @@ pub struct App {
 
 impl App {
     pub fn new(tasks: Vec<Task>, projects: [Option<String>; 10]) -> Self {
+        // Default tree view to first defined project; inbox if no projects exist yet.
+        let (last_tree_slots, last_tree_show_unc) = match projects.iter().position(|p| p.is_some()) {
+            Some(slot) => { let mut a = [false; 10]; a[slot] = true; (a, false) }
+            None => ([false; 10], true),
+        };
         Self {
             tasks,
             projects,
@@ -169,8 +174,8 @@ impl App {
             kanban_sort: KanbanSort::Age,
             saved_slots: [true; 10],
             saved_show_unc: true,
-            last_tree_slots: [true; 10],
-            last_tree_show_unc: true,
+            last_tree_slots,
+            last_tree_show_unc,
             forced_todo_task_id: None,
             mode: Mode::Normal,
             view_mode: ViewMode::Tree,
@@ -1863,9 +1868,19 @@ impl App {
     // ── Archive Done ──────────────────────────────────────────────────────────
 
     pub fn begin_archive_done(&mut self) {
+        let project_label = if self.show_unc && self.active_slots.iter().all(|&a| !a) {
+            "INBOX".to_string()
+        } else {
+            self.active_slots.iter().enumerate()
+                .find(|&(_, &on)| on)
+                .and_then(|(i, _)| self.projects[i].clone())
+                .unwrap_or_else(|| "current project".to_string())
+        };
         self.archive_done_confirm = true;
-        self.status_message =
-            Some("Archive all Done tasks? (Enter to confirm, Esc to cancel)".into());
+        self.status_message = Some(format!(
+            "Archive Done tasks in {}? (Enter to confirm, Esc to cancel)",
+            project_label
+        ));
     }
 
     pub fn cancel_archive_done(&mut self) {
@@ -1873,8 +1888,8 @@ impl App {
         self.status_message = None;
     }
 
-    /// Returns all Done tasks whose entire descendant subtree is also Done.
-    /// Only complete subtrees are archived so that tree relationships stay intact.
+    /// Returns Done tasks in the currently visible project whose entire subtree is also Done.
+    /// Scoped to the active project/inbox so Ctrl+R never touches other projects.
     pub fn collect_done_for_archive(&self) -> Vec<Task> {
         let tasks_by_id: HashMap<Uuid, &Task> =
             self.tasks.iter().map(|t| (t.id, t)).collect();
@@ -1891,7 +1906,7 @@ impl App {
 
         self.tasks
             .iter()
-            .filter(|t| fully_done(t.id, &tasks_by_id))
+            .filter(|t| self.task_visible(t) && fully_done(t.id, &tasks_by_id))
             .cloned()
             .collect()
     }
