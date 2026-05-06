@@ -21,12 +21,13 @@ const PLANNING_SECTIONS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("o", "new task below"),
             ("O", "new task above"),
-            ("i", "edit task title"),
+            ("I / A", "edit title at start / end"),
+            ("i / a", "edit title at 25% / 75%"),
             ("d", "delete task"),
             ("K / J", "reorder task up / down"),
             ("> / <", "indent / promote task"),
             ("m, then 1-9", "assign task to project"),
-            ("A", "bulk add children"),
+            ("M", "bulk add children"),
         ],
     ),
     (

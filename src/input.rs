@@ -187,9 +187,11 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('o') => app.begin_insert_after(),
         KeyCode::Char('O') => app.begin_insert_before(),
 
-        // Edit title — 'i' cursor at start, 'a' cursor at end
-        KeyCode::Char('i') => app.begin_edit(false),
-        KeyCode::Char('a') => app.begin_edit(true),
+        // Edit title — I/A at line start/end (vim), i/a at 25%/75%
+        KeyCode::Char('I') => app.begin_edit(false),
+        KeyCode::Char('A') => app.begin_edit(true),
+        KeyCode::Char('i') => app.begin_edit_at_percent(25),
+        KeyCode::Char('a') => app.begin_edit_at_percent(75),
 
         // Delete (dd)
         KeyCode::Char('d') => {
@@ -222,7 +224,7 @@ fn handle_planning_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('m') => app.begin_move_project(),
 
         // Bulk insert children
-        KeyCode::Char('A') => app.begin_bulk_insert(),
+        KeyCode::Char('M') => app.begin_bulk_insert(),
 
         // Toggle task status (Doing / Done)
         KeyCode::Char('s') => {

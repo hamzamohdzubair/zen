@@ -1018,11 +1018,25 @@ impl App {
     }
 
     /// Toggle the selected task's status between Done and Todo (tree view).
+    /// When marking Done, all descendants are also marked Done.
     pub fn tree_toggle_done(&mut self) {
         let Some(id) = self.selected_task_id(self.focused_col) else { return; };
         let current = self.task_ref(id).map(|t| t.status.clone()).unwrap_or(Status::Todo);
         let new_status = if current == Status::Done { Status::Todo } else { Status::Done };
+        if new_status == Status::Done {
+            self.cascade_status_down(id, Status::Done);
+        }
         self.tree_set_status(id, new_status);
+    }
+
+    fn cascade_status_down(&mut self, id: Uuid, status: Status) {
+        let children: Vec<Uuid> = self.task_ref(id).map(|t| t.children.clone()).unwrap_or_default();
+        for cid in children {
+            if let Some(task) = self.task_mut(cid) {
+                task.transition_to(status);
+            }
+            self.cascade_status_down(cid, status);
+        }
     }
 
     fn tree_set_status(&mut self, id: Uuid, new_status: Status) {
@@ -1537,6 +1551,22 @@ impl App {
         if let Some(id) = self.selected_task_id(col) {
             if let Some(task) = self.task_ref(id) {
                 let cursor_pos = if cursor_at_end { task.title.chars().count() } else { 0 };
+                self.edit = Some(EditState {
+                    task_id: id,
+                    title: task.title.clone(),
+                    cursor_pos,
+                });
+                self.mode = Mode::Insert;
+            }
+        }
+    }
+
+    pub fn begin_edit_at_percent(&mut self, percent: usize) {
+        let col = self.focused_col;
+        if let Some(id) = self.selected_task_id(col) {
+            if let Some(task) = self.task_ref(id) {
+                let len = task.title.chars().count();
+                let cursor_pos = (len * percent / 100).min(len);
                 self.edit = Some(EditState {
                     task_id: id,
                     title: task.title.clone(),
