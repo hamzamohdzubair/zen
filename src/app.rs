@@ -1443,15 +1443,15 @@ impl App {
                 InsertPosition::AfterParent(pid)
             }
         } else {
-            let visible_roots: Vec<Uuid> = self.visible_tasks_for(col).iter()
-                .filter(|t| t.parent_id.is_none())
-                .map(|t| t.id)
-                .collect();
-            let pos = visible_roots.iter().position(|&id| id == current_id).unwrap_or(0);
-            if pos > 0 {
-                InsertPosition::AfterSibling(visible_roots[pos - 1])
-            } else {
-                InsertPosition::AtBeginning
+            // Search all tasks (any status) to find the nearest root above current_id.
+            // Filtering by visible_tasks_for(col) would miss roots with a different status.
+            let current_pos = self.tasks.iter().position(|t| t.id == current_id).unwrap_or(0);
+            let prev_root = self.tasks[..current_pos].iter().rev()
+                .find(|t| t.parent_id.is_none())
+                .map(|t| t.id);
+            match prev_root {
+                Some(prev_id) => InsertPosition::AfterSibling(prev_id),
+                None => InsertPosition::AtBeginning,
             }
         };
 
