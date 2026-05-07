@@ -645,9 +645,13 @@ pub fn draw_archive_browser(frame: &mut Frame, app: &App, area: Rect) {
             })
             .unwrap_or_default();
 
-        let text = format!("{}{}", row.display_prefix, row.title);
+        let mut spans: Vec<Span> = Vec::new();
+        if !row.display_prefix.is_empty() {
+            spans.push(Span::styled(row.display_prefix.clone(), Style::default().fg(Color::Indexed(240))));
+        }
+        spans.push(Span::styled(row.title.clone(), title_style));
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(text, title_style))),
+            Paragraph::new(Line::from(spans)),
             Rect { x: inner.x, y, width: inner.width, height: 1 },
         );
         y += 1;
