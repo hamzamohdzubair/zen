@@ -52,6 +52,23 @@ pub fn visual_selected_ids(app: &App) -> Vec<Uuid> {
     rows[lo..=hi].iter().map(|r| r.id).collect()
 }
 
+fn has_doing_descendant(id: Uuid, tasks_by_id: &HashMap<Uuid, &crate::types::Task>, visible_ids: &HashSet<Uuid>) -> bool {
+    let children = match tasks_by_id.get(&id) {
+        Some(t) => t.children.clone(),
+        None => return false,
+    };
+    for cid in children {
+        if !visible_ids.contains(&cid) { continue; }
+        if tasks_by_id.get(&cid).map(|c| c.status == Status::Doing).unwrap_or(false) {
+            return true;
+        }
+        if has_doing_descendant(cid, tasks_by_id, visible_ids) {
+            return true;
+        }
+    }
+    false
+}
+
 fn visit_task(
     id: Uuid,
     depth: usize,
@@ -65,12 +82,6 @@ fn visit_task(
     let task = match tasks_by_id.get(&id) {
         Some(t) => t,
         None => return,
-    };
-
-    let kind = match task.status {
-        Status::Done => RowKind::Done,
-        Status::Doing => RowKind::Doing,
-        Status::Todo => RowKind::Todo,
     };
 
     let (display_prefix, children_prefix) = if depth == 0 {
@@ -90,6 +101,16 @@ fn visit_task(
         .collect();
 
     let is_collapsed = collapsed.contains(&id) && !visible_children.is_empty();
+
+    let kind = if is_collapsed && has_doing_descendant(id, tasks_by_id, visible_ids) {
+        RowKind::Doing
+    } else {
+        match task.status {
+            Status::Done => RowKind::Done,
+            Status::Doing => RowKind::Doing,
+            Status::Todo => RowKind::Todo,
+        }
+    };
 
     rows.push(TuiRow {
         id,

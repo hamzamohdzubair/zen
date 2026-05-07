@@ -10,12 +10,12 @@ impl App {
         let mut current = self.task_ref(child_id).and_then(|t| t.parent_id);
         while let Some(pid) = current {
             let children: Vec<Uuid> = self.task_ref(pid).map(|p| p.children.clone()).unwrap_or_default();
-            let derived = if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Todo).unwrap_or(false)) {
-                Status::Todo
-            } else if children.iter().any(|&cid| self.task_ref(cid).map(|c| c.status == Status::Doing).unwrap_or(false)) {
-                Status::Doing
-            } else {
+            let derived = if children.iter().all(|&cid| {
+                self.task_ref(cid).map(|c| c.status == Status::Done).unwrap_or(true)
+            }) {
                 Status::Done
+            } else {
+                Status::Todo
             };
             if self.task_ref(pid).map(|t| t.status != derived).unwrap_or(false) {
                 if let Some(parent) = self.task_mut(pid) {
