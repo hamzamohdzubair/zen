@@ -6,11 +6,13 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum Layer {
     #[default]
-    Foreground,
-    /// Temporarily submerged. `expires_at` is a Unix timestamp (seconds).
-    /// When the timestamp passes the task automatically surfaces to Foreground.
-    Background { expires_at: i64 },
-    Archive,
+    /// Visible in the main view.
+    /// Deserializes old "Foreground" and "Archive" values for backwards-compat.
+    #[serde(alias = "Foreground", alias = "Archive")]
+    Active,
+    /// Temporarily hidden. Resurfaces when the Unix timestamp `expires_at` passes.
+    #[serde(alias = "Background")]
+    Snoozed { expires_at: i64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

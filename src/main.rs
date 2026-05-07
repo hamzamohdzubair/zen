@@ -86,7 +86,7 @@ fn run_main_tui() -> io::Result<()> {
     app.fold_all();
 
     loop {
-        app.check_background_timers();
+        app.check_snooze_timers();
         terminal.draw(|f| ui::draw(f, &mut app))?;
 
         if event::poll(Duration::from_millis(100))? {
@@ -122,18 +122,6 @@ fn run_main_tui() -> io::Result<()> {
                             Some(_) => "Snapshot saved".into(),
                             None => "Snapshot failed".into(),
                         });
-                    }
-                    AppAction::SnapshotAndArchiveDone => {
-                        let snap = app.to_snapshot();
-                        snapshots::save_snapshot(&snap);
-                        let to_archive = app.collect_done_for_archive();
-                        if !to_archive.is_empty() {
-                            archive::append_tasks(&to_archive);
-                            let archived_ids: std::collections::HashSet<uuid::Uuid> =
-                                to_archive.iter().map(|t| t.id).collect();
-                            app.remove_archived_tasks(&archived_ids);
-                        }
-                        storage::save(&app.tasks);
                     }
                     AppAction::None => {}
                 }

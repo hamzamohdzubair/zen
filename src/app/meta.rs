@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashMap;
 use uuid::Uuid;
 
 impl App {
@@ -68,41 +67,6 @@ impl App {
     pub fn close_snap_browser(&mut self) {
         self.snap_popup = None;
         self.mode = Mode::Normal;
-    }
-
-    pub fn begin_archive_done(&mut self) {
-        self.archive_done_confirm = true;
-        self.status_message = Some(
-            "Archive Done tasks in current view? (Enter to confirm, Esc to cancel)".into()
-        );
-    }
-
-    pub fn cancel_archive_done(&mut self) {
-        self.archive_done_confirm = false;
-        self.status_message = None;
-    }
-
-    /// Returns Done tasks in the currently visible project whose entire subtree is also Done.
-    /// Scoped to the current view so Ctrl+R never touches other layers.
-    pub fn collect_done_for_archive(&self) -> Vec<Task> {
-        let tasks_by_id: HashMap<Uuid, &Task> =
-            self.tasks.iter().map(|t| (t.id, t)).collect();
-
-        fn fully_done(id: Uuid, tasks_by_id: &HashMap<Uuid, &Task>) -> bool {
-            match tasks_by_id.get(&id) {
-                Some(t) => {
-                    t.status == Status::Done
-                        && t.children.iter().all(|&cid| fully_done(cid, tasks_by_id))
-                }
-                None => true,
-            }
-        }
-
-        self.tasks
-            .iter()
-            .filter(|t| matches!(t.layer, Layer::Foreground) && fully_done(t.id, &tasks_by_id))
-            .cloned()
-            .collect()
     }
 
     /// Removes the given task IDs from active state after they have been written

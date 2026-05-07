@@ -11,22 +11,30 @@ mod status;
 mod tree;
 mod editing;
 mod meta;
+mod search;
 
-/// Which layer of the three-layer system is currently active in the TUI.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ActiveLayer {
-    Foreground,
-    Background,
-    Archive,
+/// Waiting-for-confirmation variants.
+#[derive(Debug, Clone)]
+pub enum PendingConfirm {
+    /// backspace on a clocked task — confirm to surface snoozed children early.
+    ExpireSnooze(Uuid),
 }
 
-/// Controls how cross-layer ancestor tasks are shown alongside active-layer tasks.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PeekState {
-    /// Blank line placeholders only — other-layer ancestors take up no text space.
-    Hidden,
-    /// Background ancestors revealed and interactive (after hold+release cycle).
-    SubmergedVisible,
+/// State for the read-only archive browser popup.
+pub struct ArchiveBrowserState {
+    pub tasks: Vec<crate::types::Task>,
+    pub scroll_offset: usize,
+}
+
+pub struct SearchState {
+    pub query: String,
+    /// Task IDs in DFS order (ignoring collapse) that contain the query.
+    pub matches: Vec<Uuid>,
+    /// Index into `matches` for the currently highlighted match.
+    pub match_idx: usize,
+    /// Snapshot of `collapsed` taken when search began. Restored on every jump
+    /// so only the current match's ancestors stay unfolded.
+    pub original_collapsed: std::collections::HashSet<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,8 +45,12 @@ pub enum Mode {
     BulkInsert,
     Visual,
     SnapBrowser,
-    /// Waiting for a duration string before submerging the selected task.
-    SubmergeInput,
+    /// Waiting for a snooze duration string before hiding the selected task.
+    SnoozeInput,
+    /// Typing a search query.
+    Search,
+    /// Read-only archive browser popup.
+    ArchiveBrowser,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,7 +104,7 @@ pub struct EditState {
     pub cursor_pos: usize,
 }
 
-pub struct SubmergeInputState {
+pub struct SnoozeInputState {
     pub task_id: Uuid,
     /// Raw text typed so far (e.g. "3d", "2h", "1w").
     pub input: String,
@@ -100,12 +112,8 @@ pub struct SubmergeInputState {
 
 pub struct App {
     pub tasks: Vec<Task>,
-    /// Active layer shown in the main tree view.
-    pub active_layer: ActiveLayer,
-    /// Controls how cross-layer ancestors appear next to active-layer tasks.
-    pub peek_state: PeekState,
-    /// True while the peek key is physically held (archived ancestors temporarily visible).
-    pub peek_held: bool,
+    /// Active search state. Some while a search query is live (typing or post-Enter navigation).
+    pub search: Option<SearchState>,
     pub mode: Mode,
     pub focused_col: Column,
     pub cursor: [usize; 3],
@@ -113,7 +121,9 @@ pub struct App {
     pub insert: Option<InsertState>,
     pub edit: Option<EditState>,
     pub bulk_insert: Option<BulkInsertState>,
-    pub submerge_input: Option<SubmergeInputState>,
+    pub snooze_input: Option<SnoozeInputState>,
+    pub pending_confirm: Option<PendingConfirm>,
+    pub archive_browser: Option<ArchiveBrowserState>,
     pub status_message: Option<String>,
     pub last_d_press: Option<Instant>,
     pub last_g_press: Option<Instant>,
@@ -121,19 +131,16 @@ pub struct App {
     pub collapsed: HashSet<Uuid>,
     pub undo_stack: Vec<Vec<Task>>,
     pub redo_stack: Vec<Vec<Task>>,
-    /// Anchor task for visual (multi-select) mode. The selection spans from this task
-    /// to the current cursor position in DFS row order.
+    /// Anchor task for visual (multi-select) mode.
     pub visual_anchor_id: Option<Uuid>,
     /// True while waiting for y/n confirmation before discarding unsaved insert/edit input.
     pub discard_confirm: bool,
     /// Which of the three flag pills (0-indexed) are currently toggled on.
     pub flag_active: [bool; 3],
-    /// The flag index (0-indexed) that 'f' will apply. Set to the most recently activated flag.
+    /// The flag index (0-indexed) that 'f' will apply.
     pub active_highlight: Option<usize>,
     /// True while waiting for Enter/Esc confirmation before clearing all highlights of a flag.
     pub flag_clear_confirm: bool,
-    /// True while waiting for confirmation before archiving all Done tasks.
-    pub archive_done_confirm: bool,
     /// State for the in-TUI snapshot browser popup.
     pub snap_popup: Option<crate::snapshots::SnapPopupState>,
 }
@@ -142,9 +149,7 @@ impl App {
     pub fn new(tasks: Vec<Task>) -> Self {
         Self {
             tasks,
-            active_layer: ActiveLayer::Foreground,
-            peek_state: PeekState::Hidden,
-            peek_held: false,
+            search: None,
             mode: Mode::Normal,
             focused_col: Column::Todo,
             cursor: [0, 0, 0],
@@ -152,7 +157,9 @@ impl App {
             insert: None,
             edit: None,
             bulk_insert: None,
-            submerge_input: None,
+            snooze_input: None,
+            pending_confirm: None,
+            archive_browser: None,
             status_message: None,
             last_d_press: None,
             last_g_press: None,
@@ -165,7 +172,6 @@ impl App {
             flag_active: [false; 3],
             active_highlight: None,
             flag_clear_confirm: false,
-            archive_done_confirm: false,
             snap_popup: None,
         }
     }
@@ -179,11 +185,7 @@ impl App {
     }
 
     pub fn task_visible(&self, task: &Task) -> bool {
-        match self.active_layer {
-            ActiveLayer::Foreground => matches!(task.layer, Layer::Foreground),
-            ActiveLayer::Background => matches!(task.layer, Layer::Background { .. }),
-            ActiveLayer::Archive => matches!(task.layer, Layer::Archive),
-        }
+        matches!(task.layer, Layer::Active)
     }
 
     /// A leaf task is Todo/Doing with no direct children that are also Todo/Doing.
@@ -325,111 +327,40 @@ mod tests {
     // ── layer visibility ────────────────────────────────────────────────────────
 
     #[test]
-    fn task_visible_fg_task_shown_in_fg_layer() {
+    fn task_visible_active_task_shown() {
         let app = empty_app();
         let t = task("x", Status::Todo);
-        assert!(app.task_visible(&t));
+        assert!(app.task_visible(&t)); // default layer is Active
     }
 
     #[test]
-    fn task_visible_fg_task_hidden_in_bg_layer() {
-        let mut app = empty_app();
-        app.active_layer = ActiveLayer::Background;
-        let t = task("x", Status::Todo);
+    fn task_visible_snoozed_task_hidden() {
+        let app = empty_app();
+        let mut t = task("x", Status::Todo);
+        t.layer = Layer::Snoozed { expires_at: i64::MAX };
         assert!(!app.task_visible(&t));
-    }
-
-    #[test]
-    fn task_visible_archive_task_shown_in_archive_layer() {
-        let mut app = empty_app();
-        app.active_layer = ActiveLayer::Archive;
-        let mut t = task("x", Status::Todo);
-        t.layer = Layer::Archive;
-        assert!(app.task_visible(&t));
-    }
-
-    #[test]
-    fn task_visible_background_task_shown_in_bg_layer() {
-        let mut app = empty_app();
-        app.active_layer = ActiveLayer::Background;
-        let mut t = task("x", Status::Todo);
-        t.layer = Layer::Background { expires_at: i64::MAX };
-        assert!(app.task_visible(&t));
     }
 
     // ── layer operations ─────────────────────────────────────────────────────
 
     #[test]
-    fn bury_task_moves_to_archive() {
-        let t = task("x", Status::Todo);
-        let id = t.id;
-        let mut app = App::new(vec![t]);
-        app.bury_task(id);
-        assert!(matches!(app.task_ref(id).unwrap().layer, Layer::Archive));
-    }
-
-    #[test]
-    fn bury_task_cascades_to_children() {
-        let mut parent = task("parent", Status::Todo);
-        let mut child = task("child", Status::Todo);
-        let pid = parent.id;
-        let cid = child.id;
-        child.parent_id = Some(pid);
-        parent.children.push(cid);
-        let mut app = App::new(vec![parent, child]);
-        app.bury_task(pid);
-        assert!(matches!(app.task_ref(pid).unwrap().layer, Layer::Archive));
-        assert!(matches!(app.task_ref(cid).unwrap().layer, Layer::Archive));
-    }
-
-    #[test]
-    fn submerge_task_moves_to_background() {
+    fn snooze_task_moves_to_snoozed() {
         let t = task("x", Status::Todo);
         let id = t.id;
         let expires = chrono::Utc::now().timestamp() + 3600;
         let mut app = App::new(vec![t]);
-        app.submerge_task(id, expires);
-        assert!(matches!(app.task_ref(id).unwrap().layer, Layer::Background { .. }));
+        app.snooze_task(id, expires);
+        assert!(matches!(app.task_ref(id).unwrap().layer, Layer::Snoozed { .. }));
     }
 
     #[test]
-    fn surface_task_restores_to_foreground() {
+    fn unsnooze_task_restores_to_active() {
         let mut t = task("x", Status::Todo);
-        t.layer = Layer::Background { expires_at: i64::MAX };
+        t.layer = Layer::Snoozed { expires_at: i64::MAX };
         let id = t.id;
         let mut app = App::new(vec![t]);
-        app.surface_task(id);
-        assert!(matches!(app.task_ref(id).unwrap().layer, Layer::Foreground));
-    }
-
-    #[test]
-    fn restore_task_moves_archive_to_foreground() {
-        let mut t = task("x", Status::Todo);
-        t.layer = Layer::Archive;
-        let id = t.id;
-        let mut app = App::new(vec![t]);
-        app.restore_task(id);
-        assert!(matches!(app.task_ref(id).unwrap().layer, Layer::Foreground));
-    }
-
-    #[test]
-    fn count_in_layer_counts_correctly() {
-        let t1 = task("a", Status::Todo);
-        let mut t2 = task("b", Status::Todo);
-        t2.layer = Layer::Archive;
-        let app = App::new(vec![t1, t2]);
-        assert_eq!(app.count_in_layer(ActiveLayer::Foreground), 1);
-        assert_eq!(app.count_in_layer(ActiveLayer::Archive), 1);
-        assert_eq!(app.count_in_layer(ActiveLayer::Background), 0);
-    }
-
-    #[test]
-    fn set_active_layer_switches_layer_and_resets_scroll() {
-        let mut app = empty_app();
-        app.tui_scroll_offset = 5;
-        app.set_active_layer(ActiveLayer::Archive);
-        assert_eq!(app.active_layer, ActiveLayer::Archive);
-        assert_eq!(app.tui_scroll_offset, 0);
+        app.unsnooze_task(id);
+        assert!(matches!(app.task_ref(id).unwrap().layer, Layer::Active));
     }
 
     #[test]

@@ -325,6 +325,58 @@ fn truncate_to(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Push the title as one or more styled spans, highlighting every occurrence of
+/// `query` (case-insensitive). `is_current` highlights the first match more brightly.
+fn push_title_spans(
+    spans: &mut Vec<Span<'static>>,
+    title: &str,
+    base_style: Style,
+    query: &str,
+    is_current: bool,
+) {
+    if query.is_empty() {
+        spans.push(Span::styled(title.to_owned(), base_style));
+        return;
+    }
+
+    let title_chars: Vec<char> = title.chars().collect();
+    let lower_title: Vec<char> = title.to_lowercase().chars().collect();
+    let lower_query: Vec<char> = query.to_lowercase().chars().collect();
+    let qlen = lower_query.len();
+    let n = title_chars.len();
+
+    let hl_current = Style::default().fg(Color::Black).bg(Color::Indexed(220)); // bright yellow
+    let hl_other   = Style::default().fg(Color::Black).bg(Color::Indexed(58));  // dark olive
+
+    let mut seg_start = 0;
+    let mut first_match_done = false;
+    let mut i = 0;
+    while i + qlen <= n {
+        if lower_title[i..i + qlen] == lower_query[..] {
+            if i > seg_start {
+                let plain: String = title_chars[seg_start..i].iter().collect();
+                spans.push(Span::styled(plain, base_style));
+            }
+            let matched: String = title_chars[i..i + qlen].iter().collect();
+            let hl = if is_current && !first_match_done {
+                first_match_done = true;
+                hl_current
+            } else {
+                hl_other
+            };
+            spans.push(Span::styled(matched, hl));
+            i += qlen;
+            seg_start = i;
+        } else {
+            i += 1;
+        }
+    }
+    if seg_start < n {
+        let tail: String = title_chars[seg_start..].iter().collect();
+        spans.push(Span::styled(tail, base_style));
+    }
+}
+
 pub fn draw_tui(frame: &mut Frame, app: &App, area: Rect) {
     draw_task_area(frame, app, app.tui_scroll_offset, area);
 }
@@ -500,7 +552,31 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             let cs = if let Some(bg) = bg { cs.bg(bg) } else { cs };
             spans.push(Span::styled(collapse_indicator, cs));
         }
-        spans.push(Span::styled(title_text, title_style));
+        // Inline insert: render a 2-char gap before the text so the cursor
+        // appears indented from the tree prefix (matches the num-label spacing).
+        if is_inline {
+            let gap_style = if let Some(bg) = bg { Style::default().bg(bg) } else { Style::default() };
+            spans.push(Span::styled("  ", gap_style));
+        }
+
+        // Render title with search highlights if a query is active.
+        if let Some(ref s) = app.search {
+            let is_current = s.matches.get(s.match_idx) == Some(&row.id);
+            push_title_spans(&mut spans, &title_text, title_style, &s.query, is_current);
+        } else {
+            spans.push(Span::styled(title_text, title_style));
+        }
+
+        // Clock symbol for tasks whose children are snoozed.
+        if !is_inline {
+            if let Some(task) = tasks_by_id.get(&row.id) {
+                if app.is_clocked(task) {
+                    let cs = Style::default().fg(Color::Indexed(226));
+                    let cs = if let Some(bg) = bg { cs.bg(bg) } else { cs };
+                    spans.push(Span::styled(" ⏰", cs));
+                }
+            }
+        }
 
         if let Some((filled, empty)) = progress_bar {
             let bar_style = Style::default().fg(Color::Indexed(110));
@@ -523,12 +599,60 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             }
         } else if is_inline {
             if let Some(ins) = &app.insert {
-                let col = ins.title.chars().count().min(title_width);
-                let cx = area.x.saturating_add(prefix_chars as u16).saturating_add(col as u16);
+                // +2 for the visual gap rendered before the text.
+                let col = ins.title.chars().count().min(title_width.saturating_sub(2));
+                let cx = area.x.saturating_add(prefix_chars as u16).saturating_add(2).saturating_add(col as u16);
                 frame.set_cursor_position((cx, y));
             }
         }
 
         y += 1;
+    }
+}
+
+pub fn draw_archive_browser(frame: &mut Frame, app: &App, area: Rect) {
+    use ratatui::layout::Alignment;
+    use ratatui::widgets::{Block, Borders, Clear};
+
+    let Some(ref ab) = app.archive_browser else { return; };
+
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Archive  —  j/k scroll  q/Esc close ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(232)));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let empty_collapsed = HashSet::new();
+    let rows = build_rows_from(&ab.tasks, &empty_collapsed);
+
+    let mut y = inner.y;
+    for row in rows.iter().skip(ab.scroll_offset).take(inner.height as usize) {
+        let title_style = ab.tasks.iter()
+            .find(|t| t.id == row.id)
+            .map(|t| match t.status {
+                crate::types::Status::Done  => Style::default()
+                    .fg(Color::Indexed(240))
+                    .add_modifier(Modifier::CROSSED_OUT),
+                crate::types::Status::Doing => Style::default()
+                    .fg(Color::Indexed(214))
+                    .add_modifier(Modifier::BOLD),
+                crate::types::Status::Todo  => Style::default().fg(Color::Indexed(252)),
+            })
+            .unwrap_or_default();
+
+        let text = format!("{}{}", row.display_prefix, row.title);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(text, title_style))),
+            Rect { x: inner.x, y, width: inner.width, height: 1 },
+        );
+        y += 1;
+        if y >= inner.y + inner.height {
+            break;
+        }
     }
 }

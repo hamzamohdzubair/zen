@@ -9,8 +9,8 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         "Navigation",
         &[
             ("j / k", "move cursor down / up"),
-            ("] / [", "next / previous layer (FG → BG → ARC)"),
-            ("1 / 2 / 3", "jump to Foreground / Background / Archive"),
+            ("g g / G", "jump to first / last task"),
+            ("/", "search (n / N to jump matches)"),
         ],
     ),
     (
@@ -19,20 +19,21 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("o / O", "new task below / above"),
             ("I / A", "edit title at start / end"),
             ("i / a", "edit title at 25% / 75%"),
-            ("d", "delete task"),
+            ("d d", "delete task"),
             ("K / J", "reorder task up / down"),
             ("> / <", "indent / promote task"),
             ("M", "bulk add children"),
         ],
     ),
     (
-        "Layer operations",
+        "Hide / archive",
         &[
-            ("b", "submerge to background (prompt for duration)"),
-            ("x", "bury to archive"),
-            ("e", "emerge / surface from background"),
-            ("r", "restore from archive (or redo in FG)"),
-            ("p", "peek: toggle background ancestors visible"),
+            ("backspace (done)", "remove from view (stays in archive)"),
+            ("backspace (todo)", "snooze — prompt for duration (2h 3d 1w)"),
+            ("backspace (doing)", "not allowed"),
+            ("g + backspace", "open read-only archive browser"),
+            ("u", "undo last action"),
+            ("r", "redo"),
         ],
     ),
     (
@@ -45,8 +46,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Folds",
         &[
-            ("z m", "fold all"),
-            ("z r", "unfold all"),
+            ("z a", "fold / unfold all"),
             ("z g", "unfold first leaf path globally"),
             ("z l", "unfold first leaf path in current root"),
             ("z . / z ,", "cycle leaf focus to next / prev root"),
@@ -55,7 +55,8 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "General",
         &[
-            ("F", "cycle flag highlights"),
+            ("! / @ / #", "toggle flag highlights 1 / 2 / 3"),
+            ("f", "flag selected task"),
             ("S", "save snapshot"),
             ("?", "open / close help"),
             ("q", "quit"),

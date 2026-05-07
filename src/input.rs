@@ -1,6 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{ActiveLayer, App, BulkInsertStep, Mode};
+use crate::app::{App, BulkInsertStep, Mode, PendingConfirm};
 use crate::types::Status;
 use crate::ui::tui;
 
@@ -8,13 +8,15 @@ pub enum AppAction {
     Quit,
     Save,
     Snapshot,
-    SnapshotAndArchiveDone,
     None,
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
     if matches!(app.mode, Mode::SnapBrowser) {
         return handle_snap_browser(app, key);
+    }
+    if matches!(app.mode, Mode::ArchiveBrowser) {
+        return handle_archive_browser(app, key);
     }
     match &app.mode.clone() {
         Mode::Normal        => handle_normal(app, key),
@@ -25,8 +27,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::Help          => handle_help(app, key),
         Mode::BulkInsert    => handle_bulk_insert(app, key),
         Mode::Visual        => handle_visual_keys(app, key),
-        Mode::SubmergeInput => handle_submerge_input(app, key),
-        Mode::SnapBrowser   => AppAction::None,
+        Mode::SnoozeInput   => handle_snooze_input(app, key),
+        Mode::Search        => handle_search(app, key),
+        Mode::SnapBrowser | Mode::ArchiveBrowser => AppAction::None,
     }
 }
 
@@ -38,51 +41,39 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         }
     }
 
-    if app.archive_done_confirm {
+    // PendingConfirm: Enter confirms, anything else cancels.
+    if let Some(confirm) = app.pending_confirm.clone() {
         match key.code {
-            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                return AppAction::SnapshotAndArchiveDone;
+            KeyCode::Enter => {
+                match confirm {
+                    PendingConfirm::ExpireSnooze(id) => {
+                        app.confirm_expire_snooze(id);
+                        return AppAction::Save;
+                    }
+                }
             }
-            _ => { app.cancel_archive_done(); return AppAction::None; }
+            _ => {
+                app.pending_confirm = None;
+                app.status_message = None;
+            }
         }
-    }
-
-    // Ctrl+R: archive all Done tasks in current view (snapshot first)
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
-    {
-        app.begin_archive_done();
         return AppAction::None;
     }
 
     match key.code {
         KeyCode::Char('q') => return AppAction::Quit,
 
+        KeyCode::Esc => {
+            // Clear active search when Esc is pressed in Normal mode.
+            if app.search.is_some() {
+                app.cancel_search();
+            }
+        }
+
         KeyCode::Char('j') | KeyCode::Down => app.move_cursor_down(),
         KeyCode::Char('k') | KeyCode::Up   => app.move_cursor_up(),
 
-        // Layer switching — direct jump
-        KeyCode::Char('1') => app.set_active_layer(ActiveLayer::Foreground),
-        KeyCode::Char('2') => app.set_active_layer(ActiveLayer::Background),
-        KeyCode::Char('3') => app.set_active_layer(ActiveLayer::Archive),
-
-        // Layer cycling
-        KeyCode::Char(']') => {
-            let next = match app.active_layer {
-                ActiveLayer::Foreground => ActiveLayer::Background,
-                ActiveLayer::Background => ActiveLayer::Archive,
-                ActiveLayer::Archive    => ActiveLayer::Foreground,
-            };
-            app.set_active_layer(next);
-        }
-        KeyCode::Char('[') => {
-            let prev = match app.active_layer {
-                ActiveLayer::Foreground => ActiveLayer::Archive,
-                ActiveLayer::Background => ActiveLayer::Foreground,
-                ActiveLayer::Archive    => ActiveLayer::Background,
-            };
-            app.set_active_layer(prev);
-        }
+        KeyCode::Char('/') => { app.begin_search(); return AppAction::None; }
 
         KeyCode::Char('?') => app.mode = Mode::Help,
 
@@ -103,7 +94,7 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
 
 /// Tree-mode structural keys.
 fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
-    // z-chord: if a pending z-press exists within 500ms, handle as fold chord.
+    // z-chord
     if let Some(z_at) = app.last_z_press.take() {
         if z_at.elapsed().as_millis() < 500 {
             return handle_z_chord(app, key);
@@ -128,56 +119,53 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
         // Delete (dd)
         KeyCode::Char('d') => { if app.try_delete_dd() { return AppAction::Save; } }
 
-        // Undo / Redo (redo is also ctrl+r)
+        // Undo / Redo
         KeyCode::Char('u') => { app.undo(); return AppAction::Save; }
-        KeyCode::Char('r') => {
-            // r = restore from archive (only meaningful in Archive layer)
-            if app.active_layer == ActiveLayer::Archive {
-                if let Some(id) = app.selected_task_id(app.focused_col) {
-                    app.restore_task(id);
-                    return AppAction::Save;
-                }
+        KeyCode::Char('r') => { app.redo(); return AppAction::Save; }
+
+        // backspace: g+backspace opens archive browser; otherwise context-sensitive hide
+        KeyCode::Backspace => {
+            if app.last_g_press.take().map(|t| t.elapsed().as_millis() < 500).unwrap_or(false) {
+                app.open_archive_browser();
             } else {
-                app.redo();
-                return AppAction::Save;
+                let col = app.focused_col;
+                if let Some(id) = app.selected_task_id(col) {
+                    if let Some(task) = app.task_ref(id) {
+                        let status = task.status;
+                        let clocked = app.is_clocked(task);
+                        match (status, clocked) {
+                            (_, true) => {
+                                app.begin_expire_snooze(id);
+                            }
+                            (Status::Done, false) => {
+                                app.archive_task(id);
+                                return AppAction::Save;
+                            }
+                            (Status::Todo, false) => {
+                                app.begin_snooze();
+                            }
+                            (Status::Doing, false) => {
+                                app.status_message = Some(
+                                    "Cannot archive or snooze a 'doing' task".into()
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // Layer operations
-        KeyCode::Char('b') => {
-            // Submerge to background (prompts for duration)
-            app.begin_submerge();
+        // Search navigation
+        KeyCode::Char('n') => {
+            if app.search.is_some() { app.search_next(); }
         }
-        KeyCode::Char('x') => {
-            // Archive (bury) selected task + descendants
-            if let Some(id) = app.selected_task_id(app.focused_col) {
-                app.bury_task(id);
-                return AppAction::Save;
-            }
-        }
-        KeyCode::Char('e') => {
-            // Surface (emerge) from background to foreground
-            if app.active_layer == ActiveLayer::Background {
-                if let Some(id) = app.selected_task_id(app.focused_col) {
-                    app.push_undo();
-                    app.surface_task(id);
-                    return AppAction::Save;
-                }
-            }
+        KeyCode::Char('N') => {
+            if app.search.is_some() { app.search_prev(); }
         }
 
         // Status operations
         KeyCode::Char(' ') => { app.tree_toggle_doing(); return AppAction::Save; }
         KeyCode::Enter     => { app.tree_toggle_done();  return AppAction::Save; }
-
-        // Peek key: cycle through cross-layer ancestor visibility
-        KeyCode::Char('p') => {
-            use crate::app::PeekState;
-            app.peek_state = match app.peek_state {
-                PeekState::Hidden          => PeekState::SubmergedVisible,
-                PeekState::SubmergedVisible => PeekState::Hidden,
-            };
-        }
 
         // Relationships
         KeyCode::Char('>') => { app.make_child(); return AppAction::Save; }
@@ -190,7 +178,15 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('V') => app.enter_visual(),
 
         // Jump to first / last row
-        KeyCode::Char('g') => { if app.consume_gg() { tui::tree_goto_first(app); } }
+        KeyCode::Char('g') => {
+            if app.consume_gg() {
+                tui::tree_goto_first(app);
+            } else {
+                // Record g-press for g+backspace chord (archive browser).
+                use std::time::Instant;
+                app.last_g_press = Some(Instant::now());
+            }
+        }
         KeyCode::Char('G') => tui::tree_goto_last(app),
 
         // Fold / unfold branch
@@ -281,27 +277,38 @@ fn handle_visual_keys(app: &mut App, key: KeyEvent) -> AppAction {
     AppAction::None
 }
 
-fn handle_submerge_input(app: &mut App, key: KeyEvent) -> AppAction {
+fn handle_snooze_input(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
         KeyCode::Esc => {
-            app.submerge_input = None;
+            app.snooze_input = None;
             app.mode = Mode::Normal;
             app.status_message = None;
         }
         KeyCode::Enter => {
-            app.commit_submerge();
+            app.commit_snooze();
             return AppAction::Save;
         }
         KeyCode::Backspace => {
-            if let Some(ref mut si) = app.submerge_input {
+            if let Some(ref mut si) = app.snooze_input {
                 si.input.pop();
             }
         }
         KeyCode::Char(c) => {
-            if let Some(ref mut si) = app.submerge_input {
+            if let Some(ref mut si) = app.snooze_input {
                 si.input.push(c);
             }
         }
+        _ => {}
+    }
+    AppAction::None
+}
+
+fn handle_search(app: &mut App, key: KeyEvent) -> AppAction {
+    match key.code {
+        KeyCode::Esc        => app.cancel_search(),
+        KeyCode::Enter      => app.commit_search(),
+        KeyCode::Backspace  => app.search_pop(),
+        KeyCode::Char(c)    => app.search_push(c),
         _ => {}
     }
     AppAction::None
@@ -447,6 +454,24 @@ fn handle_bulk_insert(app: &mut App, key: KeyEvent) -> AppAction {
 fn handle_help(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => { app.mode = Mode::Normal; }
+        _ => {}
+    }
+    AppAction::None
+}
+
+fn handle_archive_browser(app: &mut App, key: KeyEvent) -> AppAction {
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => app.close_archive_browser(),
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(ref mut ab) = app.archive_browser {
+                ab.scroll_offset = ab.scroll_offset.saturating_add(1);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(ref mut ab) = app.archive_browser {
+                ab.scroll_offset = ab.scroll_offset.saturating_sub(1);
+            }
+        }
         _ => {}
     }
     AppAction::None

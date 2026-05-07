@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::types::Task;
 
@@ -18,34 +20,58 @@ fn archive_path() -> PathBuf {
     base.join("archive.json")
 }
 
+fn load_store() -> ArchiveStore {
+    let path = archive_path();
+    if !path.exists() {
+        return ArchiveStore::default();
+    }
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_store(store: &ArchiveStore) {
+    if let Ok(raw) = serde_json::to_string_pretty(store) {
+        fs::write(archive_path(), raw).ok();
+    }
+}
+
+/// Upsert `current_tasks` into the archive: update existing entries by ID,
+/// append new ones. Tasks previously in archive but absent from `current_tasks`
+/// are kept unchanged (the archive can only grow).
+pub fn sync(current_tasks: &[Task]) {
+    if current_tasks.is_empty() {
+        return;
+    }
+    let mut store = load_store();
+    let index: HashMap<Uuid, usize> = store.tasks.iter()
+        .enumerate()
+        .map(|(i, t)| (t.id, i))
+        .collect();
+    for task in current_tasks {
+        if let Some(&pos) = index.get(&task.id) {
+            store.tasks[pos] = task.clone();
+        } else {
+            store.tasks.push(task.clone());
+        }
+    }
+    save_store(&store);
+}
+
+/// Append `tasks` to the archive without updating existing entries.
+/// Used when tasks are removed from the main view (their last known state
+/// should already be in the archive from a previous sync).
 pub fn append_tasks(tasks: &[Task]) {
     if tasks.is_empty() {
         return;
     }
-    let path = archive_path();
-    let mut store: ArchiveStore = if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
-    } else {
-        ArchiveStore::default()
-    };
+    let mut store = load_store();
     store.tasks.extend_from_slice(tasks);
-    if let Ok(raw) = serde_json::to_string_pretty(&store) {
-        fs::write(path, raw).ok();
-    }
+    save_store(&store);
 }
 
-#[allow(dead_code)]
+/// Load all tasks from the archive.
 pub fn load() -> Vec<Task> {
-    let path = archive_path();
-    if !path.exists() {
-        return Vec::new();
-    }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<ArchiveStore>(&raw).ok())
-        .map(|s| s.tasks)
-        .unwrap_or_default()
+    load_store().tasks
 }

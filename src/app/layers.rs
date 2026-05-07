@@ -2,12 +2,12 @@ use super::*;
 use uuid::Uuid;
 
 impl App {
-    /// Check all Background tasks and surface any whose timer has expired.
-    pub fn check_background_timers(&mut self) {
+    /// Auto-surface any Snoozed tasks whose timer has expired.
+    pub fn check_snooze_timers(&mut self) {
         let now = chrono::Utc::now().timestamp();
         let expired: Vec<Uuid> = self.tasks.iter()
             .filter_map(|t| {
-                if let Layer::Background { expires_at } = t.layer {
+                if let Layer::Snoozed { expires_at } = t.layer {
                     if now >= expires_at { Some(t.id) } else { None }
                 } else {
                     None
@@ -15,34 +15,105 @@ impl App {
             })
             .collect();
         for id in expired {
-            self.surface_task(id);
+            self.unsnooze_task(id);
         }
     }
 
-    /// Move `id` and its entire subtree to Background with the given expiry timestamp.
-    pub fn submerge_task(&mut self, id: Uuid, expires_at: i64) {
+    /// Move `id` and its entire subtree to Snoozed with the given expiry timestamp.
+    pub fn snooze_task(&mut self, id: Uuid, expires_at: i64) {
         self.push_undo();
-        self.apply_layer_recursive(id, Layer::Background { expires_at });
-        self.status_message = Some("Submerged to background".into());
+        self.apply_layer_recursive(id, Layer::Snoozed { expires_at });
+        self.status_message = Some("Snoozed".into());
     }
 
-    /// Move `id` and its entire subtree to Archive.
-    pub fn bury_task(&mut self, id: Uuid) {
-        self.push_undo();
-        self.apply_layer_recursive(id, Layer::Archive);
-        self.status_message = Some("Archived".into());
+    /// Move `id` and its entire subtree back to Active (surface from snooze).
+    pub fn unsnooze_task(&mut self, id: Uuid) {
+        self.apply_layer_recursive(id, Layer::Active);
     }
 
-    /// Move `id` and its entire subtree to Foreground (surface from background).
-    pub fn surface_task(&mut self, id: Uuid) {
-        self.apply_layer_recursive(id, Layer::Foreground);
+    /// Permanently remove `id` and its subtree from the main view.
+    /// The tasks are written to archive.json before removal.
+    pub fn archive_task(&mut self, id: Uuid) {
+        self.push_undo();
+        // Collect the subtree IDs to archive.
+        let mut subtree: Vec<Uuid> = Vec::new();
+        self.collect_subtree(id, &mut subtree);
+        let to_archive: Vec<crate::types::Task> = self.tasks.iter()
+            .filter(|t| subtree.contains(&t.id))
+            .cloned()
+            .collect();
+        crate::archive::append_tasks(&to_archive);
+        let id_set: HashSet<Uuid> = subtree.into_iter().collect();
+        self.remove_archived_tasks(&id_set);
     }
 
-    /// Move `id` and its entire subtree to Foreground (restore from archive).
-    pub fn restore_task(&mut self, id: Uuid) {
+    fn collect_subtree(&self, id: Uuid, out: &mut Vec<Uuid>) {
+        out.push(id);
+        if let Some(task) = self.task_ref(id) {
+            for &cid in &task.children {
+                self.collect_subtree(cid, out);
+            }
+        }
+    }
+
+    /// True if any direct child of this task is Snoozed.
+    pub fn has_snoozed_children(&self, task: &crate::types::Task) -> bool {
+        task.children.iter().any(|&cid| {
+            self.task_ref(cid)
+                .map(|c| matches!(c.layer, Layer::Snoozed { .. }))
+                .unwrap_or(false)
+        })
+    }
+
+    /// True if task is Active and has at least one Snoozed direct child.
+    pub fn is_clocked(&self, task: &crate::types::Task) -> bool {
+        matches!(task.layer, Layer::Active) && self.has_snoozed_children(task)
+    }
+
+    /// Begin early-expire confirmation for a clocked task.
+    pub fn begin_expire_snooze(&mut self, id: Uuid) {
+        // Find earliest expiry among snoozed children.
+        let min_expiry = self.task_ref(id)
+            .map(|t| t.children.clone())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|&cid| {
+                self.task_ref(cid).and_then(|c| {
+                    if let Layer::Snoozed { expires_at } = c.layer {
+                        Some(expires_at)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .min();
+
+        let due_str = if let Some(exp) = min_expiry {
+            let secs = (exp - chrono::Utc::now().timestamp()).max(0);
+            format_duration(secs)
+        } else {
+            "soon".into()
+        };
+
+        self.pending_confirm = Some(PendingConfirm::ExpireSnooze(id));
+        self.status_message = Some(
+            format!("Due in {}. Expire snooze early? Enter / Esc", due_str)
+        );
+    }
+
+    /// Surface all Snoozed direct children of the given task.
+    pub fn confirm_expire_snooze(&mut self, id: Uuid) {
         self.push_undo();
-        self.apply_layer_recursive(id, Layer::Foreground);
-        self.status_message = Some("Restored to foreground".into());
+        let children: Vec<Uuid> = self.task_ref(id)
+            .map(|t| t.children.clone())
+            .unwrap_or_default();
+        for cid in children {
+            if self.task_ref(cid).map(|c| matches!(c.layer, Layer::Snoozed { .. })).unwrap_or(false) {
+                self.apply_layer_recursive(cid, Layer::Active);
+            }
+        }
+        self.pending_confirm = None;
+        self.status_message = None;
     }
 
     pub(super) fn apply_layer_recursive(&mut self, id: Uuid, layer: Layer) {
@@ -55,8 +126,7 @@ impl App {
         }
     }
 
-    /// Parse a duration string like "2h", "3d", "1w" into seconds from now.
-    /// Returns None if the string is invalid.
+    /// Parse a duration string like "2h", "3d", "1w" into a Unix timestamp seconds from now.
     pub fn parse_duration_to_expiry(input: &str) -> Option<i64> {
         let input = input.trim();
         if input.is_empty() { return None; }
@@ -72,21 +142,21 @@ impl App {
         Some(chrono::Utc::now().timestamp() + secs)
     }
 
-    /// Begin submerge mode: store the task id and wait for duration input.
-    pub fn begin_submerge(&mut self) {
+    /// Begin snooze mode: store the task id and wait for duration input.
+    pub fn begin_snooze(&mut self) {
         let col = self.focused_col;
         if let Some(id) = self.selected_task_id(col) {
-            self.submerge_input = Some(SubmergeInputState { task_id: id, input: String::new() });
-            self.mode = Mode::SubmergeInput;
-            self.status_message = Some("Submerge duration: e.g. 2h  3d  1w  (Esc to cancel)".into());
+            self.snooze_input = Some(SnoozeInputState { task_id: id, input: String::new() });
+            self.mode = Mode::SnoozeInput;
+            self.status_message = Some("Snooze duration: e.g. 2h  3d  1w  (Esc to cancel)".into());
         }
     }
 
-    /// Commit the submerge after duration input.
-    pub fn commit_submerge(&mut self) {
-        if let Some(state) = self.submerge_input.take() {
+    /// Commit the snooze after duration input.
+    pub fn commit_snooze(&mut self) {
+        if let Some(state) = self.snooze_input.take() {
             if let Some(expires_at) = Self::parse_duration_to_expiry(&state.input) {
-                self.submerge_task(state.task_id, expires_at);
+                self.snooze_task(state.task_id, expires_at);
             } else {
                 self.status_message = Some("Invalid duration — use e.g. 2h, 3d, 1w".into());
             }
@@ -94,23 +164,26 @@ impl App {
         self.mode = Mode::Normal;
     }
 
-    /// Switch to the given layer and reset peek state.
-    pub fn set_active_layer(&mut self, layer: ActiveLayer) {
-        self.active_layer = layer;
-        self.peek_state = PeekState::Hidden;
-        self.peek_held = false;
-        self.cursor = [0, 0, 0];
-        self.focused_col = Column::Todo;
-        self.tui_scroll_offset = 0;
-        self.clamp_all_cursors();
+    // ── Archive browser ──────────────────────────────────────────────────────
+
+    pub fn open_archive_browser(&mut self) {
+        let tasks = crate::archive::load();
+        self.archive_browser = Some(ArchiveBrowserState { tasks, scroll_offset: 0 });
+        self.mode = Mode::ArchiveBrowser;
     }
 
-    /// Count tasks in the given layer.
-    pub fn count_in_layer(&self, layer: ActiveLayer) -> usize {
-        self.tasks.iter().filter(|t| match layer {
-            ActiveLayer::Foreground => matches!(t.layer, Layer::Foreground),
-            ActiveLayer::Background => matches!(t.layer, Layer::Background { .. }),
-            ActiveLayer::Archive => matches!(t.layer, Layer::Archive),
-        }).count()
+    pub fn close_archive_browser(&mut self) {
+        self.archive_browser = None;
+        self.mode = Mode::Normal;
+    }
+}
+
+fn format_duration(secs: i64) -> String {
+    if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
     }
 }

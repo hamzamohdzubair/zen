@@ -31,6 +31,10 @@ impl App {
 
     /// Delete a task by ID and all its descendants, removing it from the tree.
     pub fn delete_task(&mut self, id: Uuid) {
+        // Record DFS position before deletion so we can navigate to the nearest task after.
+        let dfs_before = self.build_visible_rows();
+        let del_pos = dfs_before.iter().position(|&r| r == id).unwrap_or(0);
+
         let parent_id = self.task_ref(id).and_then(|t| t.parent_id);
         if let Some(pid) = parent_id {
             if let Some(parent) = self.task_mut(pid) {
@@ -49,7 +53,15 @@ impl App {
             i += 1;
         }
         self.tasks.retain(|t| !to_delete.contains(&t.id));
-        self.clamp_cursor(self.focused_col);
+
+        // Navigate to the nearest remaining task (same index or the one before it).
+        let dfs_after = self.build_visible_rows();
+        if let Some(&target_id) = dfs_after.get(del_pos).or_else(|| dfs_after.last()) {
+            self.navigate_to_id(target_id);
+        } else {
+            self.clamp_all_cursors();
+        }
+
         self.status_message = Some("Deleted".into());
     }
 
