@@ -211,8 +211,7 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
 /// Handle the second key of a z-chord (z+key fold shortcuts).
 fn handle_z_chord(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
-        KeyCode::Char('m') => app.fold_all(),
-        KeyCode::Char('r') => app.unfold_all(),
+        KeyCode::Char('a') => app.toggle_fold_all(),
         KeyCode::Char('g') => app.fold_focus_global(),
         KeyCode::Char('l') => app.fold_focus_local(),
         KeyCode::Char('.') => app.cycle_leaf_next(),

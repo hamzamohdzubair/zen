@@ -34,6 +34,15 @@ impl App {
         self.collapsed.clear();
     }
 
+    /// Toggle between fold-all and unfold-all.
+    pub fn toggle_fold_all(&mut self) {
+        if self.collapsed.is_empty() {
+            self.fold_all();
+        } else {
+            self.unfold_all();
+        }
+    }
+
     /// Fold all, then unfold only the path to the first leaf of the first global root.
     pub fn fold_focus_global(&mut self) {
         let roots = self.visible_roots();
@@ -57,37 +66,37 @@ impl App {
         }
     }
 
-    /// Collapse the current root, then apply zl-logic on the next root (wraps).
+    /// Fold all, then unfold only the path to the first leaf of the next root (wraps).
     pub fn cycle_leaf_next(&mut self) {
         let roots = self.visible_roots();
         if roots.is_empty() { return; }
         let current_root = self.selected_task_id(self.focused_col)
             .map(|id| self.root_task_id(id));
         let next_root = if let Some(root) = current_root {
-            self.collapsed.insert(root);
             let pos = roots.iter().position(|&id| id == root).unwrap_or(0);
             roots[(pos + 1) % roots.len()]
         } else {
             roots[0]
         };
+        self.fold_all();
         let leaf = self.first_leaf_of(next_root);
         self.unfold_path_to(leaf);
         self.navigate_to_id(leaf);
     }
 
-    /// Collapse the current root, then apply zl-logic on the previous root (wraps).
+    /// Fold all, then unfold only the path to the first leaf of the previous root (wraps).
     pub fn cycle_leaf_prev(&mut self) {
         let roots = self.visible_roots();
         if roots.is_empty() { return; }
         let current_root = self.selected_task_id(self.focused_col)
             .map(|id| self.root_task_id(id));
         let prev_root = if let Some(root) = current_root {
-            self.collapsed.insert(root);
             let pos = roots.iter().position(|&id| id == root).unwrap_or(0);
             roots[(pos + roots.len() - 1) % roots.len()]
         } else {
             roots[roots.len() - 1]
         };
+        self.fold_all();
         let leaf = self.first_leaf_of(prev_root);
         self.unfold_path_to(leaf);
         self.navigate_to_id(leaf);
