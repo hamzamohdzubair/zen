@@ -138,7 +138,7 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
                                 app.begin_expire_snooze(id);
                             }
                             (Status::Done, false) => {
-                                app.archive_task(id);
+                                app.hide_task(id);
                                 return AppAction::Save;
                             }
                             (Status::Todo, false) => {

@@ -33,11 +33,11 @@ impl App {
 
     /// Permanently hide `id` and its subtree from the main view.
     /// Tasks remain in tasks.json with layer=Hidden.
-    pub fn archive_task(&mut self, id: Uuid) {
+    pub fn hide_task(&mut self, id: Uuid) {
         self.push_undo();
         self.apply_layer_recursive(id, Layer::Hidden);
         self.clamp_all_cursors();
-        self.status_message = Some("Archived".into());
+        self.status_message = Some("Hidden".into());
     }
 
     /// True if any direct child of this task is Snoozed.

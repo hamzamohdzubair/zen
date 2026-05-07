@@ -28,7 +28,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Hide / archive",
         &[
-            ("backspace (done)", "remove from view (stays in archive)"),
+            ("backspace (done)", "hide from main view (always in db)"),
             ("backspace (todo)", "snooze — prompt for duration (2h 3d 1w)"),
             ("backspace (doing)", "not allowed"),
             ("g + backspace", "open read-only archive browser"),
