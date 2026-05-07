@@ -43,6 +43,45 @@ impl App {
         }
     }
 
+    /// Jump to the next Doing task (wrapping), fold all, unfold only its ancestors.
+    pub fn jump_next_doing(&mut self) {
+        let rows = self.build_visible_rows();
+        let doing: Vec<Uuid> = self.tasks.iter()
+            .filter(|t| t.status == crate::types::Status::Doing)
+            .map(|t| t.id)
+            .collect();
+        if doing.is_empty() { return; }
+        let current = self.selected_task_id(self.focused_col);
+        let current_pos = current
+            .and_then(|id| rows.iter().position(|&r| r == id))
+            .unwrap_or(0);
+        let next = rows[current_pos + 1..].iter()
+            .chain(rows[..=current_pos].iter())
+            .find(|&&id| doing.contains(&id))
+            .copied();
+        if let Some(target) = next {
+            self.fold_all();
+            let mut cur = target;
+            while let Some(pid) = self.task_ref(cur).and_then(|t| t.parent_id) {
+                self.collapsed.remove(&pid);
+                cur = pid;
+            }
+            self.navigate_to_id(target);
+        }
+    }
+
+    /// Fold all, then unfold only the ancestors of the current task (leaving it untouched).
+    pub fn fold_focus_current(&mut self) {
+        if let Some(id) = self.selected_task_id(self.focused_col) {
+            self.fold_all();
+            let mut current = id;
+            while let Some(pid) = self.task_ref(current).and_then(|t| t.parent_id) {
+                self.collapsed.remove(&pid);
+                current = pid;
+            }
+        }
+    }
+
     /// Fold all, then unfold only the path to the first leaf of the first global root.
     pub fn fold_focus_global(&mut self) {
         let roots = self.visible_roots();
