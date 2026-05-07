@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Local, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -6,7 +6,38 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::types::{Status, Task};
-use super::done::{completed_at, elapsed_to_done, format_duration, format_relative};
+
+fn completed_at(task: &Task) -> Option<DateTime<Utc>> {
+    task.transitions.iter().filter(|t| t.to == Status::Done).last().map(|t| t.at)
+}
+
+fn elapsed_to_done(task: &Task) -> Option<i64> {
+    completed_at(task).map(|end| (end - task.created_at).num_seconds().max(0))
+}
+
+fn format_duration(secs: i64) -> String {
+    if secs <= 0 { return "—".into(); }
+    if secs < 60 { return format!("{}s", secs); }
+    if secs < 3600 { return format!("{}m", secs / 60); }
+    if secs < 86400 {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        return if m == 0 { format!("{}h", h) } else { format!("{}h {}m", h, m) };
+    }
+    let d = secs / 86400;
+    let h = (secs % 86400) / 3600;
+    if h == 0 { format!("{}d", d) } else { format!("{}d {}h", d, h) }
+}
+
+fn format_relative(dt: Option<DateTime<Utc>>) -> String {
+    let Some(t) = dt else { return "—".into(); };
+    let secs = (Utc::now() - t).num_seconds();
+    if secs < 60 { return "just now".into(); }
+    if secs < 3600 { return format!("{}m ago", secs / 60); }
+    if secs < 86400 { return format!("{}h ago", secs / 3600); }
+    if secs < 7 * 86400 { return format!("{}d ago", secs / 86400); }
+    t.with_timezone(&Local).format("%b %d").to_string()
+}
 
 pub struct StatsApp {
     pub tasks: Vec<Task>,

@@ -1,5 +1,4 @@
 mod help;
-pub mod done;
 pub mod snaps;
 pub mod stats;
 pub mod tui;
