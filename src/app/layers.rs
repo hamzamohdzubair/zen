@@ -31,29 +31,13 @@ impl App {
         self.apply_layer_recursive(id, Layer::Active);
     }
 
-    /// Permanently remove `id` and its subtree from the main view.
-    /// The tasks are written to archive.json before removal.
+    /// Permanently hide `id` and its subtree from the main view.
+    /// Tasks remain in tasks.json with layer=Hidden.
     pub fn archive_task(&mut self, id: Uuid) {
         self.push_undo();
-        // Collect the subtree IDs to archive.
-        let mut subtree: Vec<Uuid> = Vec::new();
-        self.collect_subtree(id, &mut subtree);
-        let to_archive: Vec<crate::types::Task> = self.tasks.iter()
-            .filter(|t| subtree.contains(&t.id))
-            .cloned()
-            .collect();
-        crate::archive::append_tasks(&to_archive);
-        let id_set: HashSet<Uuid> = subtree.into_iter().collect();
-        self.remove_archived_tasks(&id_set);
-    }
-
-    fn collect_subtree(&self, id: Uuid, out: &mut Vec<Uuid>) {
-        out.push(id);
-        if let Some(task) = self.task_ref(id) {
-            for &cid in &task.children {
-                self.collect_subtree(cid, out);
-            }
-        }
+        self.apply_layer_recursive(id, Layer::Hidden);
+        self.clamp_all_cursors();
+        self.status_message = Some("Archived".into());
     }
 
     /// True if any direct child of this task is Snoozed.
@@ -167,7 +151,7 @@ impl App {
     // ── Archive browser ──────────────────────────────────────────────────────
 
     pub fn open_archive_browser(&mut self) {
-        let tasks = crate::archive::load();
+        let tasks = self.tasks.clone();
         self.archive_browser = Some(ArchiveBrowserState { tasks, scroll_offset: 0 });
         self.mode = Mode::ArchiveBrowser;
     }

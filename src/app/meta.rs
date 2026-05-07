@@ -1,5 +1,4 @@
 use super::*;
-use uuid::Uuid;
 
 impl App {
     pub fn toggle_flag_pill(&mut self, idx: usize) {
@@ -69,27 +68,4 @@ impl App {
         self.mode = Mode::Normal;
     }
 
-    /// Removes the given task IDs from active state after they have been written
-    /// to the archive. Cleans up children lists and orphaned parent refs.
-    pub fn remove_archived_tasks(&mut self, archived_ids: &HashSet<Uuid>) {
-        if archived_ids.is_empty() {
-            return;
-        }
-        self.tasks.retain(|t| !archived_ids.contains(&t.id));
-        for task in &mut self.tasks {
-            task.children.retain(|cid| !archived_ids.contains(cid));
-            if let Some(pid) = task.parent_id {
-                if archived_ids.contains(&pid) {
-                    task.parent_id = None;
-                }
-            }
-        }
-        self.collapsed.retain(|id| !archived_ids.contains(id));
-        self.clamp_all_cursors();
-        self.status_message = Some(format!(
-            "Archived {} task{}",
-            archived_ids.len(),
-            if archived_ids.len() == 1 { "" } else { "s" }
-        ));
-    }
 }

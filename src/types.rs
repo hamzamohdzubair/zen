@@ -13,6 +13,8 @@ pub enum Layer {
     /// Temporarily hidden. Resurfaces when the Unix timestamp `expires_at` passes.
     #[serde(alias = "Background")]
     Snoozed { expires_at: i64 },
+    /// Permanently hidden from the main view; stays in tasks.json forever.
+    Hidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -34,9 +34,6 @@ pub fn load() -> Vec<Task> {
 }
 
 pub fn save(tasks: &[Task]) {
-    // Keep archive in sync: every task that exists in main view exists in archive.
-    crate::archive::sync(tasks);
-
     let path = data_path();
     let state = AppState { tasks: tasks.to_vec() };
     let raw = serde_json::to_string_pretty(&state).unwrap_or_default();
