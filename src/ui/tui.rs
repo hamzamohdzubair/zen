@@ -136,46 +136,18 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
 }
 
 /// Build tree rows from raw snapshot data, without needing a full App.
-/// Shows all tasks regardless of active_slots — snapshots are full historical records.
 pub fn build_rows_from(
     tasks: &[crate::types::Task],
-    projects: &[Option<String>; 10],
     collapsed: &HashSet<Uuid>,
 ) -> Vec<TuiRow> {
     let tasks_by_id: HashMap<Uuid, &crate::types::Task> = tasks.iter().map(|t| (t.id, t)).collect();
 
-    let slot_for = |project: &str| -> Option<usize> {
-        if project.is_empty() { return None; }
-        projects.iter().position(|p| p.as_deref() == Some(project))
-    };
+    let visible_ids: HashSet<Uuid> = tasks.iter().map(|t| t.id).collect();
 
-    // Show everything: unclassified tasks and all project slots
-    let visible_ids: HashSet<Uuid> = tasks.iter()
-        .filter(|t| t.project.is_empty() || slot_for(&t.project).is_some())
+    let roots: Vec<Uuid> = tasks.iter()
+        .filter(|t| t.parent_id.map(|pid| !visible_ids.contains(&pid)).unwrap_or(true))
         .map(|t| t.id)
         .collect();
-
-    // Sort roots by project slot: inbox (empty) → slot 1..9 → slot 0
-    let slot_order = |proj: &str| -> usize {
-        if proj.is_empty() { return 0; }
-        match projects.iter().position(|p| p.as_deref() == Some(proj)) {
-            Some(9) => 10,  // key '0' (slot index 9) comes last
-            Some(s) => s + 1,
-            None => 11,
-        }
-    };
-
-    let mut roots: Vec<Uuid> = tasks.iter()
-        .filter(|t| {
-            visible_ids.contains(&t.id)
-                && t.parent_id.map(|pid| !visible_ids.contains(&pid)).unwrap_or(true)
-        })
-        .map(|t| t.id)
-        .collect();
-    roots.sort_by_key(|&id| {
-        let proj = tasks_by_id.get(&id).map(|t| t.project.as_str()).unwrap_or("");
-        slot_order(proj)
-    });
 
     let mut rows: Vec<TuiRow> = Vec::new();
     let n = roots.len();
@@ -209,30 +181,6 @@ pub fn tree_goto_first(app: &mut App) {
 pub fn tree_goto_last(app: &mut App) {
     let rows = build_tui_rows(app);
     if let Some(last) = rows.len().checked_sub(1) { navigate_to_row(app, &rows, last); }
-}
-
-pub fn tree_jump_prev_root(app: &mut App) {
-    let rows = build_tui_rows(app);
-    if rows.is_empty() { return; }
-    let cur_pos = app.selected_task_id(app.focused_col)
-        .and_then(|id| rows.iter().position(|r| r.id == id))
-        .unwrap_or(0);
-    // Search backwards from one before current for a depth-0 row.
-    if let Some(p) = rows[..cur_pos].iter().rposition(|r| r.depth == 0) {
-        navigate_to_row(app, &rows, p);
-    }
-}
-
-pub fn tree_jump_next_root(app: &mut App) {
-    let rows = build_tui_rows(app);
-    if rows.is_empty() { return; }
-    let cur_pos = app.selected_task_id(app.focused_col)
-        .and_then(|id| rows.iter().position(|r| r.id == id))
-        .unwrap_or(0);
-    // Search forwards from one after current for a depth-0 row.
-    if let Some(rel) = rows[cur_pos + 1..].iter().position(|r| r.depth == 0) {
-        navigate_to_row(app, &rows, cur_pos + 1 + rel);
-    }
 }
 
 pub fn navigate_tree(app: &mut App, delta: i32) {

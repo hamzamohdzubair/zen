@@ -4,115 +4,71 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-use crate::app::ViewMode;
-
-const PLANNING_SECTIONS: &[(&str, &[(&str, &str)])] = &[
+const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Navigation",
         &[
-            ("h / ←", "previous project"),
-            ("l / →", "next project"),
-            ("k / ↑", "move cursor up"),
-            ("j / ↓", "move cursor down"),
+            ("j / k", "move cursor down / up"),
+            ("] / [", "next / previous layer (FG → BG → ARC)"),
+            ("1 / 2 / 3", "jump to Foreground / Background / Archive"),
         ],
     ),
     (
-        "Planning",
+        "Task editing",
         &[
-            ("o", "new task below"),
-            ("O", "new task above"),
+            ("o / O", "new task below / above"),
             ("I / A", "edit title at start / end"),
             ("i / a", "edit title at 25% / 75%"),
             ("d", "delete task"),
             ("K / J", "reorder task up / down"),
             ("> / <", "indent / promote task"),
-            ("m, then 1-9", "assign task to project"),
             ("M", "bulk add children"),
         ],
     ),
     (
-        "Insert Mode",
+        "Layer operations",
         &[
-            ("Enter", "confirm and create task"),
-            ("Esc", "cancel"),
-            ("Tab", "indent  →  make child of task above"),
-            ("Shift-Tab", "unindent  →  promote to parent level"),
+            ("b", "submerge to background (prompt for duration)"),
+            ("x", "bury to archive"),
+            ("e", "emerge / surface from background"),
+            ("r", "restore from archive (or redo in FG)"),
+            ("p", "peek: toggle background ancestors visible"),
         ],
     ),
     (
-        "Projects",
+        "Status",
         &[
-            ("P", "edit project slots  (← → pick, Enter save)"),
-            ("1-9 / 0", "toggle project filter"),
-            ("=", "enable all filters"),
-            ("-", "disable all filters"),
-            ("`", "toggle unclassified tasks"),
+            ("s", "toggle doing"),
+            ("c", "toggle done"),
+        ],
+    ),
+    (
+        "Folds",
+        &[
+            ("z m", "fold all"),
+            ("z r", "unfold all"),
+            ("z g", "unfold first leaf path globally"),
+            ("z l", "unfold first leaf path in current root"),
+            ("z . / z ,", "cycle leaf focus to next / prev root"),
         ],
     ),
     (
         "General",
         &[
-            ("Tab", "back to action mode  (kanban)"),
+            ("F", "cycle flag highlights"),
+            ("S", "save snapshot"),
             ("?", "open / close help"),
             ("q", "quit"),
         ],
     ),
 ];
 
-const ACTION_SECTIONS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "Navigation",
-        &[
-            ("h / ←", "focus left column"),
-            ("l / →", "focus right column"),
-            ("k / ↑", "move cursor up"),
-            ("j / ↓", "move cursor down"),
-        ],
-    ),
-    (
-        "Action",
-        &[
-            ("L", "advance task  →  (todo → doing → done)"),
-            ("H", "revert task  ←  (done → doing → todo)"),
-            ("Enter", "open project in planning mode  (tree)"),
-        ],
-    ),
-    (
-        "Projects",
-        &[
-            ("P", "edit project slots  (← → pick, Enter save)"),
-            ("1-9 / 0", "toggle project filter"),
-            ("=", "enable all filters"),
-            ("-", "disable all filters"),
-            ("`", "toggle unclassified tasks"),
-        ],
-    ),
-    (
-        "General",
-        &[
-            ("?", "open / close help"),
-            ("q", "quit"),
-        ],
-    ),
-];
-
-pub fn draw_help(frame: &mut Frame, view_mode: ViewMode) {
-    let sections = match view_mode {
-        ViewMode::Tree => PLANNING_SECTIONS,
-        ViewMode::Board => ACTION_SECTIONS,
-    };
-
+pub fn draw_help(frame: &mut Frame) {
     let area = centered_rect(66, 85, frame.area());
-
     frame.render_widget(Clear, area);
 
-    let title = match view_mode {
-        ViewMode::Tree => " Planning Mode  —  ? / Esc to close ",
-        ViewMode::Board => " Action Mode  —  ? / Esc to close ",
-    };
-
     let block = Block::default()
-        .title(title)
+        .title(" Help  —  ? / Esc to close ")
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -123,7 +79,7 @@ pub fn draw_help(frame: &mut Frame, view_mode: ViewMode) {
 
     let mut lines: Vec<Line> = vec![Line::from("")];
 
-    for (section, bindings) in sections {
+    for (section, bindings) in SECTIONS {
         lines.push(Line::from(Span::styled(
             format!("  {}  ", section),
             Style::default()

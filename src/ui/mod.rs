@@ -1,4 +1,3 @@
-pub(crate) mod board;
 mod help;
 pub mod done;
 pub mod snaps;
@@ -11,31 +10,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, BulkInsertStep, KanbanSort, Mode, ViewMode};
+use crate::app::{ActiveLayer, App, BulkInsertStep, Mode};
 use snaps::draw_snap_popup;
-use board::project_to_color;
 
-pub fn pill_span(key: char, name: &str, count: usize, active: bool, color: Color) -> Span<'static> {
-    let style = if active {
-        Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
-    };
-    Span::styled(format!(" {}:{} ({}) ", key, name, count), style)
-}
-
-pub fn inbox_pill_span(count: usize, active: bool) -> Span<'static> {
-    let style = if active {
-        Style::default().fg(Color::Black).bg(Color::Indexed(102)).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235))
-    };
-    Span::styled(format!(" `:INBOX({}) ", count), style)
-}
-
-pub fn slot_key_char(slot: usize) -> char {
-    if slot == 9 { '0' } else { (b'1' + slot as u8) as char }
-}
 
 /// Return the background color for flag `idx` (0-indexed).
 pub fn flag_color(idx: usize) -> Color {
@@ -63,6 +40,25 @@ pub fn flag_pill_span(idx: usize, active: bool) -> Span<'static> {
     Span::styled(format!(" \u{2691}{} ", idx + 1), style)
 }
 
+/// Layer pill colors — very dark background tints, white text.
+pub fn layer_color(layer: ActiveLayer) -> Color {
+    match layer {
+        ActiveLayer::Foreground => Color::Indexed(22),  // very dark green
+        ActiveLayer::Background => Color::Indexed(58),  // very dark yellow/olive
+        ActiveLayer::Archive    => Color::Indexed(52),  // very dark red
+    }
+}
+
+fn layer_pill_span(label: &str, key: char, count: usize, active: bool, layer: ActiveLayer) -> Span<'static> {
+    let bg = layer_color(layer);
+    let style = if active {
+        Style::default().fg(Color::Indexed(252)).bg(bg).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(233))
+    };
+    Span::styled(format!(" {}:{} ({}) ", key, label, count), style)
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
@@ -75,13 +71,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_status(frame, app, chunks[0]);
-    match app.view_mode {
-        ViewMode::Tree => tui::draw_tui(frame, app, chunks[1]),
-        ViewMode::Board => board::draw_board(frame, app, chunks[1]),
-    }
+    tui::draw_tui(frame, app, chunks[1]);
 
     if matches!(app.mode, Mode::Help) {
-        help::draw_help(frame, app.view_mode);
+        help::draw_help(frame);
     }
 
     if let Some(ref mut popup) = app.snap_popup {
@@ -93,17 +86,13 @@ const SEP: &str = "│";
 
 pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let mode_str = match &app.mode {
-        Mode::Normal => match app.view_mode {
-            ViewMode::Tree => "PLAN",
-            ViewMode::Board => "ACTION",
-        },
-        Mode::Insert => "INSERT",
-        Mode::Move => "MOVE",
-        Mode::ProjectEdit => "PROJ",
-        Mode::Help => "HELP",
-        Mode::BulkInsert => "BULK",
-        Mode::Visual => "VISUAL",
-        Mode::SnapBrowser => "SNAPS",
+        Mode::Normal        => "PLAN",
+        Mode::Insert        => "INSERT",
+        Mode::Help          => "HELP",
+        Mode::BulkInsert    => "BULK",
+        Mode::Visual        => "VISUAL",
+        Mode::SnapBrowser   => "SNAPS",
+        Mode::SubmergeInput => "SNOOZE",
     };
 
     let sep_style = Style::default().fg(Color::Indexed(240));
@@ -115,33 +104,24 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ),
     ];
 
-    // Sort indicator — shown in kanban normal mode when on Todo column
-    if app.view_mode == ViewMode::Board && matches!(app.mode, Mode::Normal)
-        && app.focused_col == crate::app::Column::Todo
-    {
-        let (sort_label, sort_color) = match app.kanban_sort {
-            KanbanSort::Age     => (" AGE ", Color::Indexed(67)),
-            KanbanSort::Project => (" PRO ", Color::Indexed(64)),
-        };
-        spans.push(Span::styled(sort_label, Style::default().fg(Color::Black).bg(sort_color)));
-    }
-
     match &app.mode {
-        Mode::Move => {
-            spans.push(Span::styled(SEP, sep_style));
-            spans.push(Span::styled(
-                " 0-9 ",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ));
-        }
         Mode::BulkInsert => {
             spans.push(Span::styled(SEP, sep_style));
             if let Some(ref bs) = app.bulk_insert {
                 let label = match bs.step {
-                    BulkInsertStep::Num => format!(" num: {}\u{2588} ", bs.num_input),
+                    BulkInsertStep::Num    => format!(" num: {}\u{2588} ", bs.num_input),
                     BulkInsertStep::Prefix => format!(" prefix: {}\u{2588} ", bs.prefix_input),
                 };
                 spans.push(Span::styled(label, Style::default().fg(Color::Indexed(208)).add_modifier(Modifier::BOLD)));
+            }
+        }
+        Mode::SubmergeInput => {
+            spans.push(Span::styled(SEP, sep_style));
+            if let Some(ref si) = app.submerge_input {
+                spans.push(Span::styled(
+                    format!(" {}\u{2588} ", si.input),
+                    Style::default().fg(Color::Indexed(226)).add_modifier(Modifier::BOLD),
+                ));
             }
         }
         _ => {}
@@ -149,45 +129,16 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 
     spans.push(Span::styled(SEP, sep_style));
 
-    if matches!(app.mode, Mode::ProjectEdit) {
-        // Show all 10 slots with cursor on editing slot
-        let pe = app.project_edit.as_ref().unwrap();
-        for slot in 0..10 {
-            let key = slot_key_char(slot);
-            let (label, style) = if slot == pe.slot {
-                let text = format!(" {}:{}\u{2588} ", key, pe.input);
-                (text, Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
-            } else {
-                match &app.projects[slot] {
-                    Some(name) => {
-                        let color = project_to_color(name);
-                        let text = format!(" {}:{} ", key, name);
-                        (text, Style::default().fg(Color::Black).bg(color))
-                    }
-                    None => {
-                        let text = format!(" {}: ", key);
-                        (text, Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(235)))
-                    }
-                }
-            };
-            spans.push(Span::styled(label, style));
-        }
-    } else if app.view_mode == ViewMode::Tree || matches!(app.mode, Mode::Move) {
-        // Project pills — shown in tree mode and move mode
-        spans.push(inbox_pill_span(app.unc_doable_count(), app.show_unc));
+    // Layer pills
+    let fg_count = app.count_in_layer(ActiveLayer::Foreground);
+    let bg_count = app.count_in_layer(ActiveLayer::Background);
+    let ar_count = app.count_in_layer(ActiveLayer::Archive);
+    spans.push(layer_pill_span("FG", '1', fg_count, app.active_layer == ActiveLayer::Foreground, ActiveLayer::Foreground));
+    spans.push(layer_pill_span("BG", '2', bg_count, app.active_layer == ActiveLayer::Background, ActiveLayer::Background));
+    spans.push(layer_pill_span("ARC", '3', ar_count, app.active_layer == ActiveLayer::Archive, ActiveLayer::Archive));
 
-        for slot in 0..10 {
-            if let Some(name) = &app.projects[slot] {
-                let key = slot_key_char(slot);
-                let count = app.doable_count_for_slot(slot);
-                let color = project_to_color(name);
-                spans.push(pill_span(key, name, count, app.active_slots[slot], color));
-            }
-        }
-    }
-
-    // Flag pills — visible in all modes except project-edit and help
-    if !matches!(app.mode, Mode::ProjectEdit | Mode::Help) {
+    // Flag pills — visible in all modes except help
+    if !matches!(app.mode, Mode::Help) {
         spans.push(Span::styled(SEP, sep_style));
         for i in 0..3 {
             spans.push(flag_pill_span(i, app.flag_active[i]));
@@ -206,23 +157,19 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 
 fn mode_color_for(app: &App) -> Color {
     match &app.mode {
-        Mode::Normal => match app.view_mode {
-            ViewMode::Tree => Color::Indexed(33),   // blue — planning
-            ViewMode::Board => Color::Indexed(208),  // orange — action
-        },
+        Mode::Normal => Color::Indexed(33),
         mode => mode_color(mode),
     }
 }
 
 fn mode_color(mode: &Mode) -> Color {
     match mode {
-        Mode::Normal => Color::Blue,
-        Mode::Insert => Color::Green,
-        Mode::Move => Color::Cyan,
-        Mode::ProjectEdit => Color::Magenta,
-        Mode::Help => Color::Indexed(240),
-        Mode::BulkInsert => Color::Indexed(208),
-        Mode::Visual => Color::Indexed(25),
-        Mode::SnapBrowser => Color::Indexed(33),
+        Mode::Normal        => Color::Blue,
+        Mode::Insert        => Color::Green,
+        Mode::Help          => Color::Indexed(240),
+        Mode::BulkInsert    => Color::Indexed(208),
+        Mode::Visual        => Color::Indexed(25),
+        Mode::SnapBrowser   => Color::Indexed(33),
+        Mode::SubmergeInput => Color::Indexed(226),
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, Local, Utc};
@@ -10,35 +10,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use uuid::Uuid;
 
 use crate::snapshots::{self, SnapPopupState, SnapViewerData, load_snapshot};
-use crate::types::Task;
-use crate::ui::board::project_to_color;
 use crate::ui::tui::{RowKind, build_rows_from};
-
-// ─── Shared viewer row renderer ───────────────────────────────────────────────
-
-enum ViewerEntry {
-    Separator(String, Color),
-    Row(usize),
-}
-
-fn build_viewer_entries(rows: &[crate::ui::tui::TuiRow], tasks: &[Task]) -> Vec<ViewerEntry> {
-    let tasks_by_id: HashMap<Uuid, &Task> = tasks.iter().map(|t| (t.id, t)).collect();
-    let mut entries: Vec<ViewerEntry> = Vec::new();
-    let mut cur_proj: Option<String> = None;
-    for (i, row) in rows.iter().enumerate() {
-        if row.depth == 0 {
-            let proj = tasks_by_id.get(&row.id).map(|t| t.project.as_str()).unwrap_or("");
-            if cur_proj.as_deref() != Some(proj) {
-                let color = project_to_color(proj);
-                let label = if proj.is_empty() { "INBOX".to_string() } else { proj.to_string() };
-                entries.push(ViewerEntry::Separator(label, color));
-                cur_proj = Some(proj.to_string());
-            }
-        }
-        entries.push(ViewerEntry::Row(i));
-    }
-    entries
-}
 
 /// Renders a read-only snapshot tree. Mutably borrows viewer to sync scroll_offset
 /// back to its true clamped value each frame, which prevents phantom-offset accumulation.
@@ -46,10 +18,8 @@ fn draw_viewer_rows(frame: &mut Frame, viewer: &mut SnapViewerData, area: Rect) 
     if area.height == 0 {
         return;
     }
-    let rows = build_rows_from(&viewer.tasks, &viewer.projects, &viewer.collapsed);
-    let entries = build_viewer_entries(&rows, &viewer.tasks);
+    let rows = build_rows_from(&viewer.tasks, &viewer.collapsed);
 
-    // Per-depth sibling counters, same logic as the live tree view.
     let mut depth_counters: Vec<usize> = Vec::new();
     let num_labels: Vec<String> = rows.iter().map(|row| {
         let d = row.depth;
@@ -63,79 +33,51 @@ fn draw_viewer_rows(frame: &mut Frame, viewer: &mut SnapViewerData, area: Rect) 
     }).collect();
 
     let area_h = area.height as usize;
-    let max_scroll = entries.len().saturating_sub(area_h);
+    let max_scroll = rows.len().saturating_sub(area_h);
     viewer.scroll_offset = viewer.scroll_offset.min(max_scroll);
     let scroll = viewer.scroll_offset;
 
     let bg = Color::Indexed(234);
     let num_style = Style::default().fg(Color::Indexed(240)).bg(bg);
     let mut y = area.y;
-    for entry in entries.iter().skip(scroll).take(area_h) {
-        match entry {
-            ViewerEntry::Separator(name, color) => {
-                let pill = format!(" {} ", name);
-                let fill_width =
-                    (area.width as usize).saturating_sub(pill.chars().count() + 1);
-                let fill = "─".repeat(fill_width);
-                let line = Line::from(vec![
-                    Span::styled(
-                        pill,
-                        Style::default()
-                            .fg(Color::Indexed(234))
-                            .bg(*color)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(" {}", fill),
-                        Style::default().fg(Color::Indexed(238)),
-                    ),
-                ]);
-                frame.render_widget(
-                    Paragraph::new(line).style(Style::default().bg(bg)),
-                    Rect { x: area.x, y, width: area.width, height: 1 },
-                );
-            }
-            ViewerEntry::Row(idx) => {
-                let row = &rows[*idx];
-                let num_str = format!("{} ", num_labels[*idx]);
-                let title_style = match row.kind {
-                    RowKind::Todo => Style::default().fg(Color::Indexed(252)).bg(bg),
-                    RowKind::Doing => Style::default()
-                        .fg(Color::Indexed(214))
-                        .bg(bg)
-                        .add_modifier(Modifier::BOLD),
-                    RowKind::Done => Style::default()
-                        .fg(Color::Indexed(240))
-                        .bg(bg)
-                        .add_modifier(Modifier::CROSSED_OUT),
-                };
-                let meta_style = Style::default().fg(Color::Indexed(238)).bg(bg);
-                let collapse_indicator = if row.is_collapsed { "▸ " } else { "" };
-                let prefix_width = row.display_prefix.chars().count()
-                    + num_str.chars().count()
-                    + collapse_indicator.chars().count();
-                let title_width = (area.width as usize).saturating_sub(prefix_width);
-                let title_text: String = row.title.chars().take(title_width).collect();
+    for (idx, row) in rows.iter().enumerate().skip(scroll).take(area_h) {
+        let num_str = format!("{} ", num_labels[idx]);
+        let title_style = match row.kind {
+            RowKind::Todo => Style::default().fg(Color::Indexed(252)).bg(bg),
+            RowKind::Doing => Style::default()
+                .fg(Color::Indexed(214))
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+            RowKind::Done => Style::default()
+                .fg(Color::Indexed(240))
+                .bg(bg)
+                .add_modifier(Modifier::CROSSED_OUT),
+        };
+        let meta_style = Style::default().fg(Color::Indexed(238)).bg(bg);
+        let collapse_indicator = if row.is_collapsed { "▸ " } else { "" };
+        let prefix_width = row.display_prefix.chars().count()
+            + num_str.chars().count()
+            + collapse_indicator.chars().count();
+        let title_width = (area.width as usize).saturating_sub(prefix_width);
+        let title_text: String = row.title.chars().take(title_width).collect();
 
-                let mut spans: Vec<Span> = Vec::new();
-                if !row.display_prefix.is_empty() {
-                    spans.push(Span::styled(row.display_prefix.clone(), meta_style));
-                }
-                spans.push(Span::styled(num_str, num_style));
-                if !collapse_indicator.is_empty() {
-                    spans.push(Span::styled(
-                        collapse_indicator,
-                        Style::default().fg(Color::Indexed(214)).bg(bg),
-                    ));
-                }
-                spans.push(Span::styled(title_text, title_style));
-
-                frame.render_widget(
-                    Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
-                    Rect { x: area.x, y, width: area.width, height: 1 },
-                );
-            }
+        let mut spans: Vec<Span> = Vec::new();
+        if !row.display_prefix.is_empty() {
+            spans.push(Span::styled(row.display_prefix.clone(), meta_style));
         }
+        spans.push(Span::styled(num_str, num_style));
+        if !collapse_indicator.is_empty() {
+            spans.push(Span::styled(
+                collapse_indicator,
+                Style::default().fg(Color::Indexed(214)).bg(bg),
+            ));
+        }
+        spans.push(Span::styled(title_text, title_style));
+
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+            Rect { x: area.x, y, width: area.width, height: 1 },
+        );
         y += 1;
     }
 }
@@ -437,7 +379,6 @@ impl SnapsApp {
                 .to_string();
             self.viewer = Some(SnapViewerData {
                 tasks: snap.tasks,
-                projects: snap.projects,
                 collapsed,
                 scroll_offset: 0,
                 label,

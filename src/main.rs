@@ -18,7 +18,7 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use app::{App, Mode, ViewMode};
+use app::{App, Mode};
 use input::{AppAction, handle_key};
 use ui::done::DoneApp;
 use ui::snaps::{SnapsApp, compute_browser_scroll};
@@ -71,31 +71,28 @@ fn main() -> io::Result<()> {
 }
 
 fn run_tui() -> io::Result<()> {
-    run_main_tui(ViewMode::Board)
+    run_main_tui()
 }
 
-fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
+fn run_main_tui() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture, cursor::Hide, cursor::SetCursorStyle::SteadyBlock)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let (tasks, projects) = storage::load();
-    let mut app = App::new(tasks, projects);
-    app.view_mode = initial_view;
+    let tasks = storage::load();
+    let mut app = App::new(tasks);
 
     loop {
+        app.check_background_timers();
         terminal.draw(|f| ui::draw(f, &mut app))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 app.status_message = None;
 
-                // In tree view normal/visual mode, j/k drive tree navigation and scroll
-                if app.view_mode == ViewMode::Tree
-                    && matches!(app.mode, Mode::Normal | Mode::Visual)
-                {
+                if matches!(app.mode, Mode::Normal | Mode::Visual) {
                     let task_area_height =
                         (terminal.size()?.height as usize).saturating_sub(1);
                     match key.code {
@@ -117,7 +114,7 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
 
                 match handle_key(&mut app, key) {
                     AppAction::Quit => break,
-                    AppAction::Save => storage::save(&app.tasks, &app.projects),
+                    AppAction::Save => storage::save(&app.tasks),
                     AppAction::Snapshot => {
                         let snap = app.to_snapshot();
                         app.status_message = Some(match snapshots::save_snapshot(&snap) {
@@ -135,17 +132,14 @@ fn run_main_tui(initial_view: ViewMode) -> io::Result<()> {
                                 to_archive.iter().map(|t| t.id).collect();
                             app.remove_archived_tasks(&archived_ids);
                         }
-                        storage::save(&app.tasks, &app.projects);
+                        storage::save(&app.tasks);
                     }
                     AppAction::None => {}
                 }
 
-                if app.view_mode == ViewMode::Tree {
-                    let task_area_height =
-                        (terminal.size()?.height as usize).saturating_sub(1);
-                    app.tui_scroll_offset =
-                        tui::compute_scroll(&app, app.tui_scroll_offset, task_area_height);
-                }
+                let task_area_height = (terminal.size()?.height as usize).saturating_sub(1);
+                app.tui_scroll_offset =
+                    tui::compute_scroll(&app, app.tui_scroll_offset, task_area_height);
             }
         }
     }
@@ -160,8 +154,8 @@ fn run_done() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let (tasks, projects) = storage::load();
-    let mut app = DoneApp::new(tasks, projects);
+    let tasks = storage::load();
+    let mut app = DoneApp::new(tasks);
 
     loop {
         terminal.draw(|f| ui::done::draw_done(f, &mut app))?;
@@ -172,9 +166,6 @@ fn run_done() -> io::Result<()> {
                     KeyCode::Char('j') | KeyCode::Down => app.move_down(),
                     KeyCode::Char('k') | KeyCode::Up => app.move_up(),
                     KeyCode::Char('s') => app.cycle_sort(),
-                    KeyCode::Char('`') => app.toggle_unc(),
-                    KeyCode::Char(c @ '1'..='9') => app.toggle_slot((c as u8 - b'1') as usize),
-                    KeyCode::Char('0') => app.toggle_slot(9),
                     _ => {}
                 }
             }
@@ -191,8 +182,8 @@ fn run_stats() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let (tasks, projects) = storage::load();
-    let mut app = StatsApp::new(tasks, projects);
+    let tasks = storage::load();
+    let mut app = StatsApp::new(tasks);
 
     loop {
         terminal.draw(|f| ui::stats::draw_stats(f, &mut app))?;
@@ -200,10 +191,6 @@ fn run_stats() -> io::Result<()> {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => break,
-                    KeyCode::Esc => app.zoom_out(),
-                    KeyCode::Enter => app.zoom_in(),
-                    KeyCode::Char('j') | KeyCode::Down => app.move_down(),
-                    KeyCode::Char('k') | KeyCode::Up => app.move_up(),
                     _ => {}
                 }
             }
@@ -278,15 +265,14 @@ fn cleanup_terminal(mut terminal: Terminal<CrosstermBackend<io::Stdout>>) -> io:
 }
 
 fn run_export_all() -> io::Result<()> {
-    let (tasks, _) = storage::load();
-    println!("id,title,project,status,created_at,time_in_todo_s,time_in_doing_s,time_in_done_s");
+    let tasks = storage::load();
+    println!("id,title,status,created_at,time_in_todo_s,time_in_doing_s,time_in_done_s");
     for task in &tasks {
         use types::Status;
         println!(
-            "{},{:?},{},{:?},{},{},{},{}",
+            "{},{:?},{:?},{},{},{},{}",
             task.id,
             task.title,
-            task.project,
             task.status,
             task.created_at.format("%Y-%m-%dT%H:%M:%SZ"),
             task.time_in(&Status::Todo),
@@ -301,8 +287,8 @@ fn run_export_done() -> io::Result<()> {
     use types::Status;
     use ui::done::{completed_at, elapsed_to_done};
 
-    let (tasks, _) = storage::load();
-    println!("id,title,project,parent_id,created_at,completed_at,elapsed_s,time_in_todo_s,time_in_doing_s");
+    let tasks = storage::load();
+    println!("id,title,parent_id,created_at,completed_at,elapsed_s,time_in_todo_s,time_in_doing_s");
     for task in tasks.iter().filter(|t| t.status == Status::Done) {
         let completed = completed_at(task)
             .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
@@ -310,10 +296,9 @@ fn run_export_done() -> io::Result<()> {
         let elapsed = elapsed_to_done(task).unwrap_or(0);
         let parent = task.parent_id.map(|id| id.to_string()).unwrap_or_default();
         println!(
-            "{},{:?},{},{},{},{},{},{},{}",
+            "{},{:?},{},{},{},{},{},{}",
             task.id,
             task.title,
-            task.project,
             parent,
             task.created_at.format("%Y-%m-%dT%H:%M:%SZ"),
             completed,

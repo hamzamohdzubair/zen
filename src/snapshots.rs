@@ -12,9 +12,6 @@ use crate::types::Task;
 pub struct Snapshot {
     pub taken_at: DateTime<Utc>,
     pub tasks: Vec<Task>,
-    pub projects: [Option<String>; 10],
-    pub active_slots: [bool; 10],
-    pub show_unc: bool,
     pub collapsed: Vec<Uuid>,
 }
 
@@ -25,7 +22,6 @@ pub struct SnapEntry {
 
 pub struct SnapViewerData {
     pub tasks: Vec<Task>,
-    pub projects: [Option<String>; 10],
     pub collapsed: HashSet<Uuid>,
     pub scroll_offset: usize,
     pub label: String,
@@ -101,7 +97,6 @@ impl SnapPopupState {
             let collapsed = snap.collapsed.iter().copied().collect();
             self.viewer = Some(SnapViewerData {
                 tasks: snap.tasks,
-                projects: snap.projects,
                 collapsed,
                 scroll_offset: 0,
                 label: entry.label.clone(),

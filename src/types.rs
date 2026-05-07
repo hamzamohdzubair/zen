@@ -2,6 +2,17 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Which layer a task lives in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum Layer {
+    #[default]
+    Foreground,
+    /// Temporarily submerged. `expires_at` is a Unix timestamp (seconds).
+    /// When the timestamp passes the task automatically surfaces to Foreground.
+    Background { expires_at: i64 },
+    Archive,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
     Todo,
@@ -9,15 +20,6 @@ pub enum Status {
     Done,
 }
 
-impl Status {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Status::Todo => "TODO",
-            Status::Doing => "DOING",
-            Status::Done => "DONE",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transition {
@@ -30,7 +32,6 @@ pub struct Transition {
 pub struct Task {
     pub id: Uuid,
     pub title: String,
-    pub project: String,
     pub status: Status,
     pub parent_id: Option<Uuid>,
     pub children: Vec<Uuid>,
@@ -39,20 +40,22 @@ pub struct Task {
     /// Bitmask of flag membership: bit 0 = flag 1, bit 1 = flag 2, bit 2 = flag 3.
     #[serde(default)]
     pub flags: u8,
+    #[serde(default)]
+    pub layer: Layer,
 }
 
 impl Task {
-    pub fn new(title: String, project: String, status: Status) -> Self {
+    pub fn new(title: String, status: Status) -> Self {
         Self {
             id: Uuid::new_v4(),
             title,
-            project,
             status,
             parent_id: None,
             children: Vec::new(),
             created_at: Utc::now(),
             transitions: Vec::new(),
             flags: 0,
+            layer: Layer::default(),
         }
     }
 
@@ -108,14 +111,7 @@ mod tests {
     use chrono::Duration;
 
     fn todo_task() -> Task {
-        Task::new("task".into(), "".into(), Status::Todo)
-    }
-
-    #[test]
-    fn status_labels() {
-        assert_eq!(Status::Todo.label(), "TODO");
-        assert_eq!(Status::Doing.label(), "DOING");
-        assert_eq!(Status::Done.label(), "DONE");
+        Task::new("task".into(), Status::Todo)
     }
 
     #[test]
