@@ -41,9 +41,6 @@ impl App {
             self.fold_all();
             let leaf = self.first_leaf_of(first_root);
             self.unfold_path_to(leaf);
-            let rows = self.build_visible_rows();
-            let pos = rows.iter().position(|&id| id == leaf).unwrap_or(0);
-            self.tui_scroll_offset = pos.saturating_sub(2);
             self.navigate_to_id(leaf);
         }
     }
@@ -56,9 +53,6 @@ impl App {
             self.fold_all();
             let leaf = self.first_leaf_of(root);
             self.unfold_path_to(leaf);
-            let rows = self.build_visible_rows();
-            let pos = rows.iter().position(|&id| id == leaf).unwrap_or(0);
-            self.tui_scroll_offset = pos.saturating_sub(2);
             self.navigate_to_id(leaf);
         }
     }
@@ -78,9 +72,6 @@ impl App {
         };
         let leaf = self.first_leaf_of(next_root);
         self.unfold_path_to(leaf);
-        let rows = self.build_visible_rows();
-        let pos = rows.iter().position(|&id| id == leaf).unwrap_or(0);
-        self.tui_scroll_offset = pos.saturating_sub(2);
         self.navigate_to_id(leaf);
     }
 
@@ -99,9 +90,6 @@ impl App {
         };
         let leaf = self.first_leaf_of(prev_root);
         self.unfold_path_to(leaf);
-        let rows = self.build_visible_rows();
-        let pos = rows.iter().position(|&id| id == leaf).unwrap_or(0);
-        self.tui_scroll_offset = pos.saturating_sub(2);
         self.navigate_to_id(leaf);
     }
 
