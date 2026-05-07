@@ -396,12 +396,14 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         };
         let ms = if let Some(bg) = bg { meta_style.bg(bg) } else { meta_style };
 
+        let collapse_indicator = if row.is_collapsed { "▸" } else { "" };
         let num_str = if is_inline || num_labels[row_idx].is_empty() {
             String::new()
+        } else if row.is_collapsed {
+            num_labels[row_idx].clone()
         } else {
             format!("{} ", num_labels[row_idx])
         };
-        let collapse_indicator = if row.is_collapsed { "▸ " } else { "" };
         let prefix_chars = row.display_prefix.chars().count()
             + num_str.chars().count()
             + collapse_indicator.chars().count();

@@ -49,14 +49,18 @@ pub fn layer_color(layer: ActiveLayer) -> Color {
     }
 }
 
-fn layer_pill_span(label: &str, key: char, count: usize, active: bool, layer: ActiveLayer) -> Span<'static> {
+fn layer_pill_span(label: &str, key: char, count: Option<usize>, active: bool, layer: ActiveLayer) -> Span<'static> {
     let bg = layer_color(layer);
     let style = if active {
         Style::default().fg(Color::Indexed(252)).bg(bg).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(233))
     };
-    Span::styled(format!(" {}:{} ({}) ", key, label, count), style)
+    let text = match count {
+        Some(n) => format!(" {}:{} ({}) ", key, label, n),
+        None    => format!(" {}:{} ", key, label),
+    };
+    Span::styled(text, style)
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -132,10 +136,9 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     // Layer pills
     let fg_count = app.count_in_layer(ActiveLayer::Foreground);
     let bg_count = app.count_in_layer(ActiveLayer::Background);
-    let ar_count = app.count_in_layer(ActiveLayer::Archive);
-    spans.push(layer_pill_span("FG", '1', fg_count, app.active_layer == ActiveLayer::Foreground, ActiveLayer::Foreground));
-    spans.push(layer_pill_span("BG", '2', bg_count, app.active_layer == ActiveLayer::Background, ActiveLayer::Background));
-    spans.push(layer_pill_span("ARC", '3', ar_count, app.active_layer == ActiveLayer::Archive, ActiveLayer::Archive));
+    spans.push(layer_pill_span("FG", '1', Some(fg_count), app.active_layer == ActiveLayer::Foreground, ActiveLayer::Foreground));
+    spans.push(layer_pill_span("BG", '2', Some(bg_count), app.active_layer == ActiveLayer::Background, ActiveLayer::Background));
+    spans.push(layer_pill_span("ARC", '3', None, app.active_layer == ActiveLayer::Archive, ActiveLayer::Archive));
 
     // Flag pills — visible in all modes except help
     if !matches!(app.mode, Mode::Help) {
