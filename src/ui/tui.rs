@@ -548,7 +548,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             spans.push(Span::styled(num_str, ns));
         }
         if !collapse_indicator.is_empty() {
-            let cs = Style::default().fg(Color::Indexed(214));
+            let cs = Style::default().fg(Color::Indexed(110));
             let cs = if let Some(bg) = bg { cs.bg(bg) } else { cs };
             spans.push(Span::styled(collapse_indicator, cs));
         }
