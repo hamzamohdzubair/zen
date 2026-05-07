@@ -167,8 +167,8 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
         }
 
         // Status operations
-        KeyCode::Char('s') => { app.tree_toggle_doing(); return AppAction::Save; }
-        KeyCode::Char('c') => { app.tree_toggle_done();  return AppAction::Save; }
+        KeyCode::Char(' ') => { app.tree_toggle_doing(); return AppAction::Save; }
+        KeyCode::Enter     => { app.tree_toggle_done();  return AppAction::Save; }
 
         // Peek key: cycle through cross-layer ancestor visibility
         KeyCode::Char('p') => {
@@ -244,7 +244,7 @@ fn handle_visual_keys(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
-        KeyCode::Char('s') => {
+        KeyCode::Char(' ') => {
             let ids = tui::visual_selected_ids(app);
             if !ids.is_empty() {
                 let all_doing = ids.iter().all(|&id| {
@@ -258,7 +258,7 @@ fn handle_visual_keys(app: &mut App, key: KeyEvent) -> AppAction {
             return AppAction::Save;
         }
 
-        KeyCode::Char('c') => {
+        KeyCode::Enter => {
             let ids = tui::visual_selected_ids(app);
             if !ids.is_empty() {
                 let all_done = ids.iter().all(|&id| {

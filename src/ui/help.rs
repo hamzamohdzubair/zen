@@ -38,8 +38,8 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Status",
         &[
-            ("s", "toggle doing"),
-            ("c", "toggle done"),
+            ("space", "toggle doing"),
+            ("enter", "toggle done"),
         ],
     ),
     (
