@@ -83,6 +83,7 @@ fn run_main_tui() -> io::Result<()> {
 
     let tasks = storage::load();
     let mut app = App::new(tasks);
+    app.fold_all();
 
     loop {
         app.check_background_timers();
