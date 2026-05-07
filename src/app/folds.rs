@@ -45,19 +45,17 @@ impl App {
 
     /// Jump to the next Doing task (wrapping), fold all, unfold only its ancestors.
     pub fn jump_next_doing(&mut self) {
-        let rows = self.build_visible_rows();
-        let doing: Vec<Uuid> = self.tasks.iter()
-            .filter(|t| t.status == crate::types::Status::Doing)
-            .map(|t| t.id)
-            .collect();
-        if doing.is_empty() { return; }
+        let rows = self.build_all_rows();
+        if rows.is_empty() { return; }
         let current = self.selected_task_id(self.focused_col);
         let current_pos = current
             .and_then(|id| rows.iter().position(|&r| r == id))
             .unwrap_or(0);
         let next = rows[current_pos + 1..].iter()
             .chain(rows[..=current_pos].iter())
-            .find(|&&id| doing.contains(&id))
+            .find(|&&id| self.task_ref(id)
+                .map(|t| t.status == crate::types::Status::Doing)
+                .unwrap_or(false))
             .copied();
         if let Some(target) = next {
             self.fold_all();
@@ -142,6 +140,29 @@ impl App {
     }
 
     /// Returns the ordered list of visible (non-collapsed) task IDs in DFS order.
+    fn build_all_rows(&self) -> Vec<Uuid> {
+        let roots: Vec<Uuid> = self.tasks.iter()
+            .filter(|t| self.task_visible(t) && t.parent_id.is_none())
+            .map(|t| t.id)
+            .collect();
+        let mut result = Vec::new();
+        for root in roots {
+            self.collect_all_dfs(root, &mut result);
+        }
+        result
+    }
+
+    fn collect_all_dfs(&self, id: Uuid, out: &mut Vec<Uuid>) {
+        out.push(id);
+        if let Some(task) = self.task_ref(id) {
+            for &child_id in &task.children {
+                if self.task_ref(child_id).map(|t| self.task_visible(t)).unwrap_or(false) {
+                    self.collect_all_dfs(child_id, out);
+                }
+            }
+        }
+    }
+
     pub(super) fn build_visible_rows(&self) -> Vec<Uuid> {
         let roots: Vec<Uuid> = self.tasks.iter()
             .filter(|t| self.task_visible(t) && t.parent_id.is_none())
