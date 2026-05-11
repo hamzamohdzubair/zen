@@ -213,8 +213,14 @@ impl App {
                     if let Some(parent) = self.task_mut(pid) {
                         parent.children.insert(child_pos, task_id);
                     }
+                    // Ensure the parent isn't ghost-collapsed (in collapsed but not visibly
+                    // showing ▸ because it previously had no children).
+                    self.collapsed.remove(&pid);
                 }
             }
+
+            // Propagate first so column membership is stable before we set the cursor.
+            self.propagate_status_up(task_id);
 
             let col = match status {
                 Status::Todo => Column::Todo,
@@ -225,8 +231,7 @@ impl App {
             if let Some(new_pos) = visible.iter().position(|t| t.id == task_id) {
                 self.cursor[Self::col_index(col)] = new_pos;
             }
-            // Propagate up so a newly added Todo task un-Dones any completed ancestors
-            self.propagate_status_up(task_id);
+            self.focused_col = col;
         }
         self.mode = Mode::Normal;
     }
