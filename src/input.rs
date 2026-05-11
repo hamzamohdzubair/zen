@@ -1,20 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{App, BulkInsertStep, Mode, PendingConfirm};
+use crate::app::{App, ArchiveView, BulkInsertStep, Mode, PendingConfirm};
 use crate::types::Status;
 use crate::ui::tui;
 
 pub enum AppAction {
     Quit,
     Save,
-    Snapshot,
     None,
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
-    if matches!(app.mode, Mode::SnapBrowser) {
-        return handle_snap_browser(app, key);
-    }
     if matches!(app.mode, Mode::ArchiveBrowser) {
         return handle_archive_browser(app, key);
     }
@@ -29,7 +25,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::Visual        => handle_visual_keys(app, key),
         Mode::SnoozeInput   => handle_snooze_input(app, key),
         Mode::Search        => handle_search(app, key),
-        Mode::SnapBrowser | Mode::ArchiveBrowser => AppAction::None,
+        Mode::ArchiveBrowser => AppAction::None,
     }
 }
 
@@ -76,9 +72,6 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('/') => { app.begin_search(); return AppAction::None; }
 
         KeyCode::Char('?') => app.mode = Mode::Help,
-
-        KeyCode::Char('S') => return AppAction::Snapshot,
-        KeyCode::Char('Z') => { app.open_snap_browser(); return AppAction::None; }
 
         // Flag highlight keys
         KeyCode::Char('!') => app.toggle_flag_pill(0),
@@ -460,38 +453,36 @@ fn handle_help(app: &mut App, key: KeyEvent) -> AppAction {
 }
 
 fn handle_archive_browser(app: &mut App, key: KeyEvent) -> AppAction {
-    match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => app.close_archive_browser(),
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(ref mut ab) = app.archive_browser {
-                ab.scroll_offset = ab.scroll_offset.saturating_add(1);
-            }
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if let Some(ref mut ab) = app.archive_browser {
-                ab.scroll_offset = ab.scroll_offset.saturating_sub(1);
-            }
-        }
-        _ => {}
-    }
-    AppAction::None
-}
+    let in_day_view = app.archive_browser
+        .as_ref()
+        .map(|ab| matches!(ab.view, ArchiveView::Day))
+        .unwrap_or(false);
 
-fn handle_snap_browser(app: &mut App, key: KeyEvent) -> AppAction {
-    let has_viewer = app.snap_popup.as_ref().map(|p| p.viewer.is_some()).unwrap_or(false);
-    if has_viewer {
+    if in_day_view {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => { if let Some(p) = app.snap_popup.as_mut() { p.close_viewer(); } }
-            KeyCode::Char('j') | KeyCode::Down => { if let Some(p) = app.snap_popup.as_mut() { p.viewer_scroll_down(); } }
-            KeyCode::Char('k') | KeyCode::Up   => { if let Some(p) = app.snap_popup.as_mut() { p.viewer_scroll_up(); } }
+            KeyCode::Char('q') | KeyCode::Esc => app.archive_back_to_calendar(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Some(ref mut ab) = app.archive_browser {
+                    ab.day_scroll = ab.day_scroll.saturating_add(1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Some(ref mut ab) = app.archive_browser {
+                    ab.day_scroll = ab.day_scroll.saturating_sub(1);
+                }
+            }
             _ => {}
         }
     } else {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => app.close_snap_browser(),
-            KeyCode::Char('j') | KeyCode::Down => { if let Some(p) = app.snap_popup.as_mut() { p.move_down(); } }
-            KeyCode::Char('k') | KeyCode::Up   => { if let Some(p) = app.snap_popup.as_mut() { p.move_up(); } }
-            KeyCode::Enter => { if let Some(p) = app.snap_popup.as_mut() { p.open_viewer(); } }
+            KeyCode::Char('q') | KeyCode::Esc => app.close_archive_browser(),
+            KeyCode::Char('h') | KeyCode::Left  => app.archive_prev_day(),
+            KeyCode::Char('l') | KeyCode::Right => app.archive_next_day(),
+            KeyCode::Char('k') | KeyCode::Up    => app.archive_prev_week(),
+            KeyCode::Char('j') | KeyCode::Down  => app.archive_next_week(),
+            KeyCode::Char('[')                   => app.archive_prev_month(),
+            KeyCode::Char(']')                   => app.archive_next_month(),
+            KeyCode::Enter                       => app.archive_open_day(),
             _ => {}
         }
     }

@@ -35,7 +35,12 @@ pub fn load() -> Vec<Task> {
 
 pub fn save(tasks: &[Task]) {
     let path = data_path();
-    let state = AppState { tasks: tasks.to_vec() };
+    let active: Vec<Task> = tasks
+        .iter()
+        .filter(|t| !matches!(t.layer, crate::types::Layer::Hidden))
+        .cloned()
+        .collect();
+    let state = AppState { tasks: active };
     let raw = serde_json::to_string_pretty(&state).unwrap_or_default();
     fs::write(path, raw).ok();
 }

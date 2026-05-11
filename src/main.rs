@@ -1,6 +1,6 @@
 mod app;
+mod archive;
 mod input;
-mod snapshots;
 mod storage;
 mod types;
 mod ui;
@@ -19,7 +19,6 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use app::{App, Mode};
 use input::{AppAction, handle_key};
-use ui::snaps::{SnapsApp, compute_browser_scroll};
 use ui::stats::StatsApp;
 use ui::tui;
 
@@ -36,8 +35,6 @@ enum Command {
     Tui,
     /// Show project statistics
     Stats,
-    /// Browse saved tree snapshots
-    Snaps,
     /// Export tasks as CSV to stdout
     Export,
 }
@@ -45,9 +42,8 @@ enum Command {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Tui => run_tui(),
-        Command::Stats => run_stats(),
-        Command::Snaps => run_snaps(),
+        Command::Tui    => run_tui(),
+        Command::Stats  => run_stats(),
         Command::Export => run_export_all(),
     }
 }
@@ -98,13 +94,6 @@ fn run_main_tui() -> io::Result<()> {
                 match handle_key(&mut app, key) {
                     AppAction::Quit => break,
                     AppAction::Save => storage::save(&app.tasks),
-                    AppAction::Snapshot => {
-                        let snap = app.to_snapshot();
-                        app.status_message = Some(match snapshots::save_snapshot(&snap) {
-                            Some(_) => "Snapshot saved".into(),
-                            None => "Snapshot failed".into(),
-                        });
-                    }
                     AppAction::None => {}
                 }
 
@@ -143,63 +132,6 @@ fn run_stats() -> io::Result<()> {
     cleanup_terminal(terminal)
 }
 
-fn run_snaps() -> io::Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut app = SnapsApp::new();
-
-    loop {
-        terminal.draw(|f| ui::snaps::draw_snaps(f, &mut app))?;
-
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                app.status_message = None;
-                let h = terminal.size()?.height as usize;
-                let area_height = h.saturating_sub(2);
-
-                if app.viewer.is_some() {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => app.close_viewer(),
-                        KeyCode::Char('j') | KeyCode::Down => app.viewer_scroll_down(),
-                        KeyCode::Char('k') | KeyCode::Up => app.viewer_scroll_up(),
-                        _ => {}
-                    }
-                } else {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            app.move_down();
-                            app.scroll_offset =
-                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            app.move_up();
-                            app.scroll_offset =
-                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
-                        }
-                        KeyCode::Char('l') | KeyCode::Enter | KeyCode::Right => {
-                            app.toggle_or_open();
-                            app.scroll_offset =
-                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
-                        }
-                        KeyCode::Char('h') | KeyCode::Left => {
-                            app.collapse_current();
-                            app.scroll_offset =
-                                compute_browser_scroll(app.cursor, app.scroll_offset, area_height);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    cleanup_terminal(terminal)
-}
 
 fn cleanup_terminal(mut terminal: Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     disable_raw_mode()?;

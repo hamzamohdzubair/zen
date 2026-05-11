@@ -50,22 +50,5 @@ impl App {
         self.status_message = None;
     }
 
-    pub fn to_snapshot(&self) -> crate::snapshots::Snapshot {
-        crate::snapshots::Snapshot {
-            taken_at: chrono::Utc::now(),
-            tasks: self.tasks.clone(),
-            collapsed: self.collapsed.iter().copied().collect(),
-        }
-    }
-
-    pub fn open_snap_browser(&mut self) {
-        self.snap_popup = Some(crate::snapshots::SnapPopupState::load());
-        self.mode = Mode::SnapBrowser;
-    }
-
-    pub fn close_snap_browser(&mut self) {
-        self.snap_popup = None;
-        self.mode = Mode::Normal;
-    }
 
 }

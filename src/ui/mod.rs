@@ -1,5 +1,4 @@
 mod help;
-pub mod snaps;
 pub mod stats;
 pub mod tui;
 
@@ -10,7 +9,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, BulkInsertStep, Mode};
-use snaps::draw_snap_popup;
 
 
 /// Return the background color for flag `idx` (0-indexed).
@@ -60,10 +58,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if matches!(app.mode, Mode::Help) {
         help::draw_help(frame);
     }
-
-    if let Some(ref mut popup) = app.snap_popup {
-        draw_snap_popup(frame, popup);
-    }
 }
 
 const SEP: &str = "│";
@@ -75,7 +69,6 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Help           => "HELP",
         Mode::BulkInsert     => "BULK",
         Mode::Visual         => "VISUAL",
-        Mode::SnapBrowser    => "SNAPS",
         Mode::SnoozeInput    => "SNOOZE",
         Mode::Search         => "SEARCH",
         Mode::ArchiveBrowser => "ARCHIVE",
@@ -176,7 +169,6 @@ fn mode_color(mode: &Mode) -> Color {
         Mode::Help           => Color::Indexed(240),
         Mode::BulkInsert     => Color::Indexed(208),
         Mode::Visual         => Color::Indexed(25),
-        Mode::SnapBrowser    => Color::Indexed(33),
         Mode::SnoozeInput    => Color::Indexed(226),
         Mode::Search         => Color::Indexed(220),
         Mode::ArchiveBrowser => Color::Indexed(52),

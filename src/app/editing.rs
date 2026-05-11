@@ -159,10 +159,19 @@ impl App {
                 self.mode = Mode::Normal;
                 return;
             }
-            let mut task = Task::new(state.title.trim().to_string(), state.status.clone());
+            let effective_status = if let Some(pid) = state.parent_id {
+                if self.task_ref(pid).map(|p| p.status == Status::Doing).unwrap_or(false) {
+                    Status::Doing
+                } else {
+                    state.status.clone()
+                }
+            } else {
+                state.status.clone()
+            };
+            let mut task = Task::new(state.title.trim().to_string(), effective_status.clone());
             task.parent_id = state.parent_id;
             let task_id = task.id;
-            let status = state.status.clone();
+            let status = effective_status;
 
             match state.parent_id {
                 None => {

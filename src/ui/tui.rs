@@ -1,13 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
+use chrono::{Datelike, NaiveDate};
 use uuid::Uuid;
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::app::{App, Column, InsertPosition, Mode};
+use crate::app::{App, ArchiveBrowserState, ArchiveView, Column, InsertPosition, Mode};
 use crate::types::Status;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -156,27 +157,6 @@ pub fn build_tui_rows(app: &App) -> Vec<TuiRow> {
     rows
 }
 
-/// Build tree rows from raw snapshot data, without needing a full App.
-pub fn build_rows_from(
-    tasks: &[crate::types::Task],
-    collapsed: &HashSet<Uuid>,
-) -> Vec<TuiRow> {
-    let tasks_by_id: HashMap<Uuid, &crate::types::Task> = tasks.iter().map(|t| (t.id, t)).collect();
-
-    let visible_ids: HashSet<Uuid> = tasks.iter().map(|t| t.id).collect();
-
-    let roots: Vec<Uuid> = tasks.iter()
-        .filter(|t| t.parent_id.map(|pid| !visible_ids.contains(&pid)).unwrap_or(true))
-        .map(|t| t.id)
-        .collect();
-
-    let mut rows: Vec<TuiRow> = Vec::new();
-    let n = roots.len();
-    for (i, &root_id) in roots.iter().enumerate() {
-        visit_task(root_id, 0, "", i == n - 1, &visible_ids, collapsed, &tasks_by_id, &mut rows);
-    }
-    rows
-}
 
 fn navigate_to_row(app: &mut App, rows: &[TuiRow], pos: usize) {
     let id = rows[pos].id;
@@ -427,9 +407,6 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
     // so that scrolled-off rows still count correctly.
     let mut depth_counters: Vec<usize> = Vec::new();
     let num_labels: Vec<String> = rows.iter().map(|row| {
-        if row.id == Uuid::nil() {
-            return String::new();
-        }
         let d = row.depth;
         if d < depth_counters.len() {
             depth_counters.truncate(d + 1);
@@ -470,7 +447,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         let ms = if let Some(bg) = bg { meta_style.bg(bg) } else { meta_style };
 
         let collapse_indicator = if row.is_collapsed { "▸" } else { "" };
-        let num_str = if is_inline || num_labels[row_idx].is_empty() {
+        let num_str = if num_labels[row_idx].is_empty() {
             String::new()
         } else if row.is_collapsed {
             num_labels[row_idx].clone()
@@ -552,12 +529,6 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             let cs = if let Some(bg) = bg { cs.bg(bg) } else { cs };
             spans.push(Span::styled(collapse_indicator, cs));
         }
-        // Inline insert: render a 2-char gap before the text so the cursor
-        // appears indented from the tree prefix (matches the num-label spacing).
-        if is_inline {
-            let gap_style = if let Some(bg) = bg { Style::default().bg(bg) } else { Style::default() };
-            spans.push(Span::styled("  ", gap_style));
-        }
 
         // Render title with search highlights if a query is active.
         if let Some(ref s) = app.search {
@@ -599,9 +570,8 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             }
         } else if is_inline {
             if let Some(ins) = &app.insert {
-                // +2 for the visual gap rendered before the text.
-                let col = ins.title.chars().count().min(title_width.saturating_sub(2));
-                let cx = area.x.saturating_add(prefix_chars as u16).saturating_add(2).saturating_add(col as u16);
+                let col = ins.title.chars().count().min(title_width);
+                let cx = area.x.saturating_add(prefix_chars as u16).saturating_add(col as u16);
                 frame.set_cursor_position((cx, y));
             }
         }
@@ -611,15 +581,120 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
 }
 
 pub fn draw_archive_browser(frame: &mut Frame, app: &App, area: Rect) {
-    use ratatui::layout::Alignment;
-    use ratatui::widgets::{Block, Borders, Clear};
-
     let Some(ref ab) = app.archive_browser else { return; };
+    match ab.view {
+        ArchiveView::Calendar => draw_archive_calendar(frame, ab, area),
+        ArchiveView::Day      => draw_archive_day(frame, ab, area),
+    }
+}
 
-    frame.render_widget(Clear, area);
+fn draw_archive_calendar(frame: &mut Frame, ab: &ArchiveBrowserState, area: Rect) {
+    let popup_w: u16 = 28;
+    let popup_h: u16 = 13;
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup = Rect { x, y, width: popup_w.min(area.width), height: popup_h.min(area.height) };
+
+    frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Archive  —  j/k scroll  q/Esc close ")
+        .title(" Archive ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(232)));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut row_y = inner.y;
+
+    // Month / year header
+    let header = format!("{} {}", month_name(ab.month), ab.year);
+    let hx = inner.x + (inner.width.saturating_sub(header.len() as u16)) / 2;
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            header,
+            Style::default().fg(Color::Indexed(252)).add_modifier(Modifier::BOLD),
+        )])),
+        Rect { x: hx, y: row_y, width: inner.width, height: 1 },
+    );
+    row_y += 1;
+
+    // Day-of-week labels
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            "Mo Tu We Th Fr Sa Su",
+            Style::default().fg(Color::Indexed(240)),
+        )])),
+        Rect { x: inner.x + 3, y: row_y, width: inner.width, height: 1 },
+    );
+    row_y += 1;
+
+    // Calendar grid
+    let first = NaiveDate::from_ymd_opt(ab.year, ab.month, 1).unwrap();
+    let start_col = first.weekday().num_days_from_monday(); // 0=Mon
+    let total_days = calendar_days_in_month(ab.year, ab.month);
+
+    let mut day = 1u32;
+    for _row in 0..6 {
+        if day > total_days { break; }
+
+        let mut spans: Vec<Span> = vec![Span::raw("   ")]; // 3-char left pad
+
+        let leading = if day == 1 { start_col } else { 0 };
+        for _ in 0..leading {
+            spans.push(Span::raw("   ")); // blank slot
+        }
+
+        for col in leading..7 {
+            if day > total_days { break; }
+
+            let date = NaiveDate::from_ymd_opt(ab.year, ab.month, day).unwrap();
+            let has_data = ab.available_dates.contains(&date);
+            let is_selected = day == ab.selected_day;
+
+            let style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::Indexed(33)).add_modifier(Modifier::BOLD)
+            } else if has_data {
+                Style::default().fg(Color::Indexed(214)).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Indexed(240))
+            };
+
+            spans.push(Span::styled(format!("{:2}", day), style));
+            if col < 6 { spans.push(Span::raw(" ")); }
+
+            day += 1;
+        }
+
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect { x: inner.x, y: row_y, width: inner.width, height: 1 },
+        );
+        row_y += 1;
+    }
+
+    // Help text at bottom of inner area
+    let help_y = inner.y + inner.height.saturating_sub(1);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            " [/] month  Enter view  q close",
+            Style::default().fg(Color::Indexed(238)),
+        )])),
+        Rect { x: inner.x, y: help_y, width: inner.width, height: 1 },
+    );
+}
+
+fn draw_archive_day(frame: &mut Frame, ab: &ArchiveBrowserState, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let date_str = NaiveDate::from_ymd_opt(ab.year, ab.month, ab.selected_day)
+        .map(|d| d.format("%B %-d, %Y").to_string())
+        .unwrap_or_default();
+    let title = format!(" {}  —  j/k scroll  q back ", date_str);
+
+    let block = Block::default()
+        .title(title)
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Indexed(240)).bg(Color::Indexed(232)));
@@ -627,36 +702,131 @@ pub fn draw_archive_browser(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let empty_collapsed = HashSet::new();
-    let rows = build_rows_from(&ab.tasks, &empty_collapsed);
+    let date = NaiveDate::from_ymd_opt(ab.year, ab.month, ab.selected_day)
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+
+    let rows = build_archive_rows(&ab.day_tasks, date);
 
     let mut y = inner.y;
-    for row in rows.iter().skip(ab.scroll_offset).take(inner.height as usize) {
-        let title_style = ab.tasks.iter()
-            .find(|t| t.id == row.id)
-            .map(|t| match t.status {
-                crate::types::Status::Done  => Style::default()
-                    .fg(Color::Indexed(240))
-                    .add_modifier(Modifier::CROSSED_OUT),
-                crate::types::Status::Doing => Style::default()
-                    .fg(Color::Indexed(214))
-                    .add_modifier(Modifier::BOLD),
-                crate::types::Status::Todo  => Style::default().fg(Color::Indexed(252)),
-            })
-            .unwrap_or_default();
+    for row in rows.iter().skip(ab.day_scroll).take(inner.height as usize) {
+        let (prefix_style, title_style) = match row.event {
+            ArchiveEvent::Completed => (
+                Style::default().fg(Color::Indexed(238)),
+                Style::default().fg(Color::Indexed(240)).add_modifier(Modifier::CROSSED_OUT),
+            ),
+            ArchiveEvent::Created => (
+                Style::default().fg(Color::Indexed(240)),
+                Style::default().fg(Color::Indexed(252)),
+            ),
+            ArchiveEvent::Context => (
+                Style::default().fg(Color::Indexed(236)),
+                Style::default().fg(Color::Indexed(238)),
+            ),
+        };
 
         let mut spans: Vec<Span> = Vec::new();
-        if !row.display_prefix.is_empty() {
-            spans.push(Span::styled(row.display_prefix.clone(), Style::default().fg(Color::Indexed(240))));
+        if !row.prefix.is_empty() {
+            spans.push(Span::styled(row.prefix.clone(), prefix_style));
         }
         spans.push(Span::styled(row.title.clone(), title_style));
+
         frame.render_widget(
             Paragraph::new(Line::from(spans)),
             Rect { x: inner.x, y, width: inner.width, height: 1 },
         );
         y += 1;
-        if y >= inner.y + inner.height {
-            break;
-        }
+        if y >= inner.y + inner.height { break; }
     }
+}
+
+enum ArchiveEvent { Created, Completed, Context }
+
+struct ArchiveDisplayRow {
+    title: String,
+    prefix: String,
+    event: ArchiveEvent,
+}
+
+fn build_archive_rows(tasks: &[crate::archive::ArchiveTask], date: NaiveDate) -> Vec<ArchiveDisplayRow> {
+    let by_id: HashMap<Uuid, &crate::archive::ArchiveTask> =
+        tasks.iter().map(|t| (t.id, t)).collect();
+    let ids: HashSet<Uuid> = tasks.iter().map(|t| t.id).collect();
+
+    let mut roots: Vec<&crate::archive::ArchiveTask> = tasks
+        .iter()
+        .filter(|t| t.parent_id.map(|pid| !ids.contains(&pid)).unwrap_or(true))
+        .collect();
+    roots.sort_by_key(|t| t.created_at);
+
+    let mut rows: Vec<ArchiveDisplayRow> = Vec::new();
+    let n = roots.len();
+    for (i, root) in roots.iter().enumerate() {
+        visit_archive_task(root.id, 0, "", i == n - 1, &ids, &by_id, &mut rows, date);
+    }
+    rows
+}
+
+fn visit_archive_task(
+    id: Uuid,
+    depth: usize,
+    parent_prefix: &str,
+    is_last: bool,
+    all_ids: &HashSet<Uuid>,
+    by_id: &HashMap<Uuid, &crate::archive::ArchiveTask>,
+    rows: &mut Vec<ArchiveDisplayRow>,
+    date: NaiveDate,
+) {
+    let task = match by_id.get(&id) { Some(t) => t, None => return };
+
+    let (display_prefix, children_prefix) = if depth == 0 {
+        (String::new(), String::new())
+    } else {
+        let connector = if is_last { "╰─ " } else { "├─ " };
+        let cont      = if is_last { "   " } else { "│  " };
+        (format!("{}{}", parent_prefix, connector), format!("{}{}", parent_prefix, cont))
+    };
+
+    let event = if task.completed_at.map(|c| c.date_naive() == date).unwrap_or(false) {
+        ArchiveEvent::Completed
+    } else if task.created_at.date_naive() == date {
+        ArchiveEvent::Created
+    } else {
+        ArchiveEvent::Context
+    };
+
+    rows.push(ArchiveDisplayRow { title: task.title.clone(), prefix: display_prefix, event });
+
+    let mut children: Vec<&crate::archive::ArchiveTask> = by_id
+        .values()
+        .filter(|t| t.parent_id == Some(id) && all_ids.contains(&t.id))
+        .copied()
+        .collect();
+    children.sort_by_key(|t| t.created_at);
+
+    let n = children.len();
+    for (i, child) in children.iter().enumerate() {
+        visit_archive_task(
+            child.id, depth + 1, &children_prefix, i == n - 1,
+            all_ids, by_id, rows, date,
+        );
+    }
+}
+
+fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "January",  2 => "February", 3 => "March",
+        4 => "April",    5 => "May",       6 => "June",
+        7 => "July",     8 => "August",    9 => "September",
+        10 => "October", 11 => "November", 12 => "December",
+        _ => "?",
+    }
+}
+
+fn calendar_days_in_month(year: i32, month: u32) -> u32 {
+    let next = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)
+    };
+    next.unwrap().pred_opt().unwrap().day()
 }

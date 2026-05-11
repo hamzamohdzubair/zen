@@ -20,10 +20,19 @@ pub enum PendingConfirm {
     ExpireSnooze(Uuid),
 }
 
-/// State for the read-only archive browser popup.
+pub enum ArchiveView {
+    Calendar,
+    Day,
+}
+
 pub struct ArchiveBrowserState {
-    pub tasks: Vec<crate::types::Task>,
-    pub scroll_offset: usize,
+    pub view: ArchiveView,
+    pub year: i32,
+    pub month: u32,
+    pub selected_day: u32,
+    pub available_dates: std::collections::HashSet<chrono::NaiveDate>,
+    pub day_tasks: Vec<crate::archive::ArchiveTask>,
+    pub day_scroll: usize,
 }
 
 pub struct SearchState {
@@ -44,12 +53,11 @@ pub enum Mode {
     Help,
     BulkInsert,
     Visual,
-    SnapBrowser,
     /// Waiting for a snooze duration string before hiding the selected task.
     SnoozeInput,
     /// Typing a search query.
     Search,
-    /// Read-only archive browser popup.
+    /// Calendar-based archive browser.
     ArchiveBrowser,
 }
 
@@ -141,8 +149,6 @@ pub struct App {
     pub active_highlight: Option<usize>,
     /// True while waiting for Enter/Esc confirmation before clearing all highlights of a flag.
     pub flag_clear_confirm: bool,
-    /// State for the in-TUI snapshot browser popup.
-    pub snap_popup: Option<crate::snapshots::SnapPopupState>,
 }
 
 impl App {
@@ -172,7 +178,6 @@ impl App {
             flag_active: [false; 3],
             active_highlight: None,
             flag_clear_confirm: false,
-            snap_popup: None,
         }
     }
 
@@ -587,6 +592,22 @@ mod tests {
         app.commit_insert();
         assert!(app.tasks.is_empty());
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn commit_insert_child_of_doing_inherits_doing_and_demotes_parent() {
+        let parent = task("parent", Status::Doing);
+        let parent_id = parent.id;
+        let mut app = App::new(vec![parent]);
+        app.focused_col = Column::Doing;
+        app.cursor[App::col_index(Column::Doing)] = 0;
+        app.begin_insert_after();
+        app.insert.as_mut().unwrap().title = "subtask".into();
+        app.insert.as_mut().unwrap().parent_id = Some(parent_id);
+        app.commit_insert();
+        let new_task = app.tasks.iter().find(|t| t.title == "subtask").unwrap();
+        assert_eq!(new_task.status, Status::Doing, "child should inherit Doing");
+        assert_eq!(app.task_ref(parent_id).unwrap().status, Status::Todo, "parent should demote to Todo");
     }
 
     #[test]
