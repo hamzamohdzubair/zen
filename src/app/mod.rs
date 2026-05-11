@@ -33,6 +33,8 @@ pub struct ArchiveBrowserState {
     pub available_dates: std::collections::HashSet<chrono::NaiveDate>,
     pub day_tasks: Vec<crate::archive::ArchiveTask>,
     pub day_scroll: usize,
+    /// Active date-jump input (YYYY-MM-DD). Some while the user is typing.
+    pub date_jump_input: Option<String>,
 }
 
 pub struct SearchState {

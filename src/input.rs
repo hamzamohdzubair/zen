@@ -453,6 +453,32 @@ fn handle_help(app: &mut App, key: KeyEvent) -> AppAction {
 }
 
 fn handle_archive_browser(app: &mut App, key: KeyEvent) -> AppAction {
+    let date_jumping = app.archive_browser
+        .as_ref()
+        .map(|ab| ab.date_jump_input.is_some())
+        .unwrap_or(false);
+
+    if date_jumping {
+        match key.code {
+            KeyCode::Esc => app.archive_cancel_date_jump(),
+            KeyCode::Enter => { app.archive_commit_date_jump(); }
+            KeyCode::Backspace => {
+                if let Some(ref mut ab) = app.archive_browser {
+                    if let Some(ref mut s) = ab.date_jump_input { s.pop(); }
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut ab) = app.archive_browser {
+                    if let Some(ref mut s) = ab.date_jump_input {
+                        if s.len() < 10 { s.push(c); }
+                    }
+                }
+            }
+            _ => {}
+        }
+        return AppAction::None;
+    }
+
     let in_day_view = app.archive_browser
         .as_ref()
         .map(|ab| matches!(ab.view, ArchiveView::Day))
@@ -461,6 +487,9 @@ fn handle_archive_browser(app: &mut App, key: KeyEvent) -> AppAction {
     if in_day_view {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => app.archive_back_to_calendar(),
+            KeyCode::Char('/') => app.archive_begin_date_jump(),
+            KeyCode::Char('[') => app.archive_day_prev(),
+            KeyCode::Char(']') => app.archive_day_next(),
             KeyCode::Char('j') | KeyCode::Down => {
                 if let Some(ref mut ab) = app.archive_browser {
                     ab.day_scroll = ab.day_scroll.saturating_add(1);
@@ -476,6 +505,7 @@ fn handle_archive_browser(app: &mut App, key: KeyEvent) -> AppAction {
     } else {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => app.close_archive_browser(),
+            KeyCode::Char('/') => app.archive_begin_date_jump(),
             KeyCode::Char('h') | KeyCode::Left  => app.archive_prev_day(),
             KeyCode::Char('l') | KeyCode::Right => app.archive_next_day(),
             KeyCode::Char('k') | KeyCode::Up    => app.archive_prev_week(),

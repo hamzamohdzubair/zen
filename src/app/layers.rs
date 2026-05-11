@@ -211,6 +211,7 @@ impl App {
             available_dates,
             day_tasks: vec![],
             day_scroll: 0,
+            date_jump_input: None,
         });
         self.mode = Mode::ArchiveBrowser;
     }
@@ -302,11 +303,67 @@ impl App {
         }
     }
 
+    pub fn archive_day_prev(&mut self) {
+        self.archive_prev_day();
+        if let Some(ref mut ab) = self.archive_browser {
+            if let Some(date) = chrono::NaiveDate::from_ymd_opt(ab.year, ab.month, ab.selected_day) {
+                ab.day_tasks = crate::archive::load_day_snapshot(date);
+                ab.day_scroll = 0;
+            }
+        }
+    }
+
+    pub fn archive_day_next(&mut self) {
+        self.archive_next_day();
+        if let Some(ref mut ab) = self.archive_browser {
+            if let Some(date) = chrono::NaiveDate::from_ymd_opt(ab.year, ab.month, ab.selected_day) {
+                ab.day_tasks = crate::archive::load_day_snapshot(date);
+                ab.day_scroll = 0;
+            }
+        }
+    }
+
     pub fn archive_back_to_calendar(&mut self) {
         if let Some(ref mut ab) = self.archive_browser {
             ab.view = ArchiveView::Calendar;
             ab.day_tasks = vec![];
             ab.day_scroll = 0;
+        }
+    }
+
+    pub fn archive_begin_date_jump(&mut self) {
+        if let Some(ref mut ab) = self.archive_browser {
+            ab.date_jump_input = Some(String::new());
+        }
+    }
+
+    pub fn archive_cancel_date_jump(&mut self) {
+        if let Some(ref mut ab) = self.archive_browser {
+            ab.date_jump_input = None;
+        }
+    }
+
+    /// Commit the current date_jump_input. Returns true if the date was valid and navigation occurred.
+    pub fn archive_commit_date_jump(&mut self) -> bool {
+        let input = match self.archive_browser.as_ref().and_then(|ab| ab.date_jump_input.clone()) {
+            Some(s) => s,
+            None => return false,
+        };
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(&input, "%Y-%m-%d") {
+            use chrono::Datelike;
+            if let Some(ref mut ab) = self.archive_browser {
+                ab.year = date.year();
+                ab.month = date.month();
+                ab.selected_day = date.day();
+                ab.available_dates = crate::archive::available_dates_in_month(ab.year, ab.month);
+                ab.view = ArchiveView::Calendar;
+                ab.day_tasks = vec![];
+                ab.day_scroll = 0;
+                ab.date_jump_input = None;
+            }
+            true
+        } else {
+            false
         }
     }
 }

@@ -674,15 +674,26 @@ fn draw_archive_calendar(frame: &mut Frame, ab: &ArchiveBrowserState, area: Rect
         row_y += 1;
     }
 
-    // Help text at bottom of inner area
+    // Help text / date-jump input at bottom of inner area
     let help_y = inner.y + inner.height.saturating_sub(1);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            " [/] month  Enter view  q close",
-            Style::default().fg(Color::Indexed(238)),
-        )])),
-        Rect { x: inner.x, y: help_y, width: inner.width, height: 1 },
-    );
+    if let Some(ref input) = ab.date_jump_input {
+        let prompt = format!("jump: {}_", input);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                prompt,
+                Style::default().fg(Color::Indexed(252)),
+            )])),
+            Rect { x: inner.x, y: help_y, width: inner.width, height: 1 },
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                " [/] month  / jump  Enter view  q close",
+                Style::default().fg(Color::Indexed(238)),
+            )])),
+            Rect { x: inner.x, y: help_y, width: inner.width, height: 1 },
+        );
+    }
 }
 
 fn draw_archive_day(frame: &mut Frame, ab: &ArchiveBrowserState, area: Rect) {
@@ -691,7 +702,11 @@ fn draw_archive_day(frame: &mut Frame, ab: &ArchiveBrowserState, area: Rect) {
     let date_str = NaiveDate::from_ymd_opt(ab.year, ab.month, ab.selected_day)
         .map(|d| d.format("%B %-d, %Y").to_string())
         .unwrap_or_default();
-    let title = format!(" {}  —  j/k scroll  q back ", date_str);
+    let title = if let Some(ref input) = ab.date_jump_input {
+        format!(" jump: {}_ ", input)
+    } else {
+        format!(" {}  —  [/] day  j/k scroll  q back ", date_str)
+    };
 
     let block = Block::default()
         .title(title)
