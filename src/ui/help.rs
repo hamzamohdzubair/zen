@@ -32,7 +32,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("backspace (hidden)", "unhide task"),
             ("backspace (todo)", "snooze — prompt for duration (2h 3d 1w)"),
             ("backspace (doing)", "not allowed"),
-            ("shift+backspace", "toggle showing hidden tasks"),
+            ("H", "toggle showing hidden tasks"),
             ("u", "undo last action"),
             ("r", "redo"),
         ],

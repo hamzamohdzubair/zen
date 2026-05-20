@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{App, BulkInsertStep, Mode, PendingConfirm};
 use crate::types::Status;
@@ -112,44 +112,42 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('u') => { app.undo(); return AppAction::Save; }
         KeyCode::Char('r') => { app.redo(); return AppAction::Save; }
 
-        // shift+backspace: toggle showing hidden tasks
         // backspace: hide done task (or unhide if already hidden); snooze todo
         KeyCode::Backspace => {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                app.toggle_show_hidden();
-            } else {
-                let _ = app.last_g_press.take();
-                let col = app.focus;
-                if let Some(id) = app.selected_task_id(col) {
-                    if let Some(task) = app.task_ref(id) {
-                        let status = task.status;
-                        let is_hidden = matches!(task.layer, crate::types::Layer::Hidden);
-                        let clocked = app.is_clocked(task);
-                        match (status, is_hidden, clocked) {
-                            (_, _, true) => {
-                                app.begin_expire_snooze(id);
-                            }
-                            (Status::Done, true, false) => {
-                                app.unhide_task(id);
-                                return AppAction::Save;
-                            }
-                            (Status::Done, false, false) => {
-                                app.hide_task(id);
-                                return AppAction::Save;
-                            }
-                            (Status::Todo, _, false) => {
-                                app.begin_snooze();
-                            }
-                            (Status::Doing, _, false) => {
-                                app.status_message = Some(
-                                    "Cannot hide or snooze a 'doing' task".into()
-                                );
-                            }
+            let _ = app.last_g_press.take();
+            let col = app.focus;
+            if let Some(id) = app.selected_task_id(col) {
+                if let Some(task) = app.task_ref(id) {
+                    let status = task.status;
+                    let is_hidden = matches!(task.layer, crate::types::Layer::Hidden);
+                    let clocked = app.is_clocked(task);
+                    match (status, is_hidden, clocked) {
+                        (_, _, true) => {
+                            app.begin_expire_snooze(id);
+                        }
+                        (Status::Done, true, false) => {
+                            app.unhide_task(id);
+                            return AppAction::Save;
+                        }
+                        (Status::Done, false, false) => {
+                            app.hide_task(id);
+                            return AppAction::Save;
+                        }
+                        (Status::Todo, _, false) => {
+                            app.begin_snooze();
+                        }
+                        (Status::Doing, _, false) => {
+                            app.status_message = Some(
+                                "Cannot hide or snooze a 'doing' task".into()
+                            );
                         }
                     }
                 }
             }
         }
+
+        // H: toggle showing hidden tasks
+        KeyCode::Char('H') => app.toggle_show_hidden(),
 
         // Search navigation
         KeyCode::Char('n') => {
