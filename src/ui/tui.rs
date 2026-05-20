@@ -452,19 +452,28 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             + num_str.chars().count()
             + collapse_indicator.chars().count();
 
-        // Progress bar (●/○): one circle per direct visible child.
-        let progress_bar: Option<(String, String)> = if !is_inline && !is_editing {
+        // Progress bar: ●/○ for active children; in ARCHIVE mode, dim ● for hidden children.
+        let progress_bar: Option<(String, String, String)> = if !is_inline && !is_editing {
             if let Some(task) = tasks_by_id.get(&row.id) {
-                let total = task.children.iter()
-                    .filter(|&&cid| tasks_by_id.get(&cid).map(|t| app.task_visible(*t)).unwrap_or(false))
+                let active_done = task.children.iter()
+                    .filter(|&&cid| tasks_by_id.get(&cid)
+                        .map(|t| matches!(t.layer, crate::types::Layer::Active) && t.status == Status::Done)
+                        .unwrap_or(false))
                     .count();
-                if total > 0 {
-                    let done = task.children.iter()
+                let active_other = task.children.iter()
+                    .filter(|&&cid| tasks_by_id.get(&cid)
+                        .map(|t| matches!(t.layer, crate::types::Layer::Active) && t.status != Status::Done)
+                        .unwrap_or(false))
+                    .count();
+                let hidden_count = if app.show_hidden {
+                    task.children.iter()
                         .filter(|&&cid| tasks_by_id.get(&cid)
-                            .map(|t| app.task_visible(*t) && t.status == Status::Done)
+                            .map(|t| matches!(t.layer, crate::types::Layer::Hidden))
                             .unwrap_or(false))
-                        .count();
-                    Some(("●".repeat(done), "○".repeat(total - done)))
+                        .count()
+                } else { 0 };
+                if active_done + active_other + hidden_count > 0 {
+                    Some(("●".repeat(active_done), "○".repeat(active_other), "●".repeat(hidden_count)))
                 } else {
                     None
                 }
@@ -475,7 +484,7 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             None
         };
 
-        let bar_reserve = progress_bar.as_ref().map(|(f, e)| f.len() + e.len() + 1).unwrap_or(0);
+        let bar_reserve = progress_bar.as_ref().map(|(f, e, h)| f.len() + e.len() + h.len() + 1).unwrap_or(0);
         let title_width = (area.width as usize).saturating_sub(prefix_chars + bar_reserve);
         let raw_title = if is_editing {
             app.edit.as_ref().unwrap().title.clone()
@@ -508,7 +517,10 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
         }
         if !num_str.is_empty() {
             let is_next = next_row_id == Some(row.id);
-            let ns = if is_next {
+            let ns = if row.is_hidden {
+                let s = Style::default().fg(Color::Indexed(236));
+                if let Some(bg) = bg { s.bg(bg) } else { s }
+            } else if is_next {
                 let s = Style::default().fg(Color::Indexed(77)).add_modifier(Modifier::BOLD);
                 if let Some(bg) = bg { s.bg(bg) } else { s }
             } else if let Some(bg_color) = bg {
@@ -547,10 +559,15 @@ fn draw_task_area(frame: &mut Frame, app: &App, scroll_offset: usize, area: Rect
             }
         }
 
-        if let Some((filled, empty)) = progress_bar {
+        if let Some((filled, empty, hidden)) = progress_bar {
             let bar_style = Style::default().fg(Color::Indexed(110));
             let bar_style = if let Some(c) = bg { bar_style.bg(c) } else { bar_style };
             spans.push(Span::styled(format!(" {}{}", filled, empty), bar_style));
+            if !hidden.is_empty() {
+                let hidden_style = Style::default().fg(Color::Indexed(236));
+                let hidden_style = if let Some(c) = bg { hidden_style.bg(c) } else { hidden_style };
+                spans.push(Span::styled(hidden, hidden_style));
+            }
         }
 
         let para_style = if let Some(bg) = bg { Style::default().bg(bg) } else { Style::default() };
