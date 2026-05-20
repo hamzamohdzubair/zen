@@ -149,9 +149,9 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
         // H: toggle showing hidden tasks
         KeyCode::Char('H') => app.toggle_show_hidden(),
 
-        // Search navigation
+        // Search navigation / jump to next doing
         KeyCode::Char('n') => {
-            if app.search.is_some() { app.search_next(); }
+            if app.search.is_some() { app.search_next(); } else { app.jump_next_doing(); }
         }
         KeyCode::Char('N') => {
             if app.search.is_some() { app.search_prev(); }
@@ -203,7 +203,6 @@ fn handle_z_chord(app: &mut App, key: KeyEvent) -> AppAction {
     match key.code {
         KeyCode::Char('a') => app.toggle_fold_all(),
         KeyCode::Char('o') => app.fold_focus_current(),
-        KeyCode::Char(' ') => app.jump_next_doing(),
         KeyCode::Char('g') => app.fold_focus_global(),
         KeyCode::Char('l') => app.fold_focus_local(),
         KeyCode::Char('.') => app.cycle_leaf_next(),
