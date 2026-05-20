@@ -51,10 +51,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_status(frame, app, chunks[0]);
     tui::draw_tui(frame, app, chunks[1]);
 
-    if matches!(app.mode, Mode::ArchiveBrowser) {
-        tui::draw_archive_browser(frame, app, chunks[1]);
-    }
-
     if matches!(app.mode, Mode::Help) {
         help::draw_help(frame);
     }
@@ -64,14 +60,13 @@ const SEP: &str = "│";
 
 pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let mode_str = match &app.mode {
-        Mode::Normal         => "PLAN",
+        Mode::Normal         => if app.show_hidden { "ARCHIVE" } else { "PLAN" },
         Mode::Insert         => "INSERT",
         Mode::Help           => "HELP",
         Mode::BulkInsert     => "BULK",
         Mode::Visual         => "VISUAL",
         Mode::SnoozeInput    => "SNOOZE",
         Mode::Search         => "SEARCH",
-        Mode::ArchiveBrowser => "ARCHIVE",
     };
 
     let sep_style = Style::default().fg(Color::Indexed(240));
@@ -145,6 +140,14 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
+    if app.show_hidden {
+        spans.push(Span::styled(SEP, sep_style));
+        spans.push(Span::styled(
+            " ~ hidden ",
+            Style::default().fg(Color::Indexed(238)),
+        ));
+    }
+
     if let Some(msg) = &app.status_message {
         spans.push(Span::styled(
             format!("  {}", msg),
@@ -157,6 +160,7 @@ pub fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 
 fn mode_color_for(app: &App) -> Color {
     match &app.mode {
+        Mode::Normal if app.show_hidden => Color::Indexed(52),
         Mode::Normal => Color::Indexed(33),
         mode => mode_color(mode),
     }
@@ -164,13 +168,12 @@ fn mode_color_for(app: &App) -> Color {
 
 fn mode_color(mode: &Mode) -> Color {
     match mode {
-        Mode::Normal         => Color::Blue,
-        Mode::Insert         => Color::Green,
-        Mode::Help           => Color::Indexed(240),
-        Mode::BulkInsert     => Color::Indexed(208),
-        Mode::Visual         => Color::Indexed(25),
-        Mode::SnoozeInput    => Color::Indexed(226),
-        Mode::Search         => Color::Indexed(220),
-        Mode::ArchiveBrowser => Color::Indexed(52),
+        Mode::Normal      => Color::Blue,
+        Mode::Insert      => Color::Green,
+        Mode::Help        => Color::Indexed(240),
+        Mode::BulkInsert  => Color::Indexed(208),
+        Mode::Visual      => Color::Indexed(25),
+        Mode::SnoozeInput => Color::Indexed(226),
+        Mode::Search      => Color::Indexed(220),
     }
 }

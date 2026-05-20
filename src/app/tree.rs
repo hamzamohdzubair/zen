@@ -5,7 +5,7 @@ impl App {
     /// Move selected task one visual row up in the DFS tree, reparenting if needed.
     pub fn tree_swap_up(&mut self) {
         self.push_undo();
-        let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
+        let Some(task_id) = self.selected_task_id(self.focus) else { return; };
         let task_parent = self.task_ref(task_id).and_then(|t| t.parent_id);
 
         match task_parent {
@@ -38,10 +38,10 @@ impl App {
             }
         }
 
-        let col = self.focused_col;
+        let col = self.focus;
         let visible = self.visible_tasks_for(col);
         if let Some(pos) = visible.iter().position(|t| t.id == task_id) {
-            self.cursor[Self::col_index(col)] = pos;
+            self.cursor[Self::status_index(col)] = pos;
         }
     }
 
@@ -49,7 +49,7 @@ impl App {
     pub fn tree_swap_down(&mut self) {
         self.push_undo();
         let dfs = self.dfs_visible_ids();
-        let Some(task_id) = self.selected_task_id(self.focused_col) else { return; };
+        let Some(task_id) = self.selected_task_id(self.focus) else { return; };
         let i = match dfs.iter().position(|&id| id == task_id) {
             Some(p) => p,
             None => return,
@@ -81,10 +81,10 @@ impl App {
             self.tasks.swap(cur_idx, next_idx);
         }
 
-        let col = self.focused_col;
+        let col = self.focus;
         let visible = self.visible_tasks_for(col);
         if let Some(pos) = visible.iter().position(|t| t.id == task_id) {
-            self.cursor[Self::col_index(col)] = pos;
+            self.cursor[Self::status_index(col)] = pos;
         }
     }
 
@@ -110,7 +110,7 @@ impl App {
 
     pub fn make_child(&mut self) {
         self.push_undo();
-        let child_id = match self.selected_task_id(self.focused_col) {
+        let child_id = match self.selected_task_id(self.focus) {
             Some(id) => id,
             None => return,
         };
@@ -152,7 +152,7 @@ impl App {
 
     pub fn make_root(&mut self) {
         self.push_undo();
-        let col = self.focused_col;
+        let col = self.focus;
         if let Some(id) = self.selected_task_id(col) {
             let old_parent_id = match self.task_ref(id).and_then(|t| t.parent_id) {
                 Some(pid) => pid,

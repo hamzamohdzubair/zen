@@ -1,6 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, ArchiveView, BulkInsertStep, Mode, PendingConfirm};
+use crate::app::{App, BulkInsertStep, Mode, PendingConfirm};
 use crate::types::Status;
 use crate::ui::tui;
 
@@ -11,9 +11,6 @@ pub enum AppAction {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
-    if matches!(app.mode, Mode::ArchiveBrowser) {
-        return handle_archive_browser(app, key);
-    }
     match &app.mode.clone() {
         Mode::Normal        => handle_normal(app, key),
         Mode::Insert => {
@@ -25,7 +22,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> AppAction {
         Mode::Visual        => handle_visual_keys(app, key),
         Mode::SnoozeInput   => handle_snooze_input(app, key),
         Mode::Search        => handle_search(app, key),
-        Mode::ArchiveBrowser => AppAction::None,
     }
 }
 
@@ -116,30 +112,37 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
         KeyCode::Char('u') => { app.undo(); return AppAction::Save; }
         KeyCode::Char('r') => { app.redo(); return AppAction::Save; }
 
-        // backspace: g+backspace opens archive browser; otherwise context-sensitive hide
+        // shift+backspace: toggle showing hidden tasks
+        // backspace: hide done task (or unhide if already hidden); snooze todo
         KeyCode::Backspace => {
-            if app.last_g_press.take().map(|t| t.elapsed().as_millis() < 500).unwrap_or(false) {
-                app.open_archive_browser();
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                app.toggle_show_hidden();
             } else {
-                let col = app.focused_col;
+                let _ = app.last_g_press.take();
+                let col = app.focus;
                 if let Some(id) = app.selected_task_id(col) {
                     if let Some(task) = app.task_ref(id) {
                         let status = task.status;
+                        let is_hidden = matches!(task.layer, crate::types::Layer::Hidden);
                         let clocked = app.is_clocked(task);
-                        match (status, clocked) {
-                            (_, true) => {
+                        match (status, is_hidden, clocked) {
+                            (_, _, true) => {
                                 app.begin_expire_snooze(id);
                             }
-                            (Status::Done, false) => {
+                            (Status::Done, true, false) => {
+                                app.unhide_task(id);
+                                return AppAction::Save;
+                            }
+                            (Status::Done, false, false) => {
                                 app.hide_task(id);
                                 return AppAction::Save;
                             }
-                            (Status::Todo, false) => {
+                            (Status::Todo, _, false) => {
                                 app.begin_snooze();
                             }
-                            (Status::Doing, false) => {
+                            (Status::Doing, _, false) => {
                                 app.status_message = Some(
-                                    "Cannot archive or snooze a 'doing' task".into()
+                                    "Cannot hide or snooze a 'doing' task".into()
                                 );
                             }
                         }
@@ -175,7 +178,7 @@ fn handle_tree_keys(app: &mut App, key: KeyEvent) -> AppAction {
             if app.consume_gg() {
                 tui::tree_goto_first(app);
             } else {
-                // Record g-press for g+backspace chord (archive browser).
+                // Record g-press for gg navigation chord.
                 use std::time::Instant;
                 app.last_g_press = Some(Instant::now());
             }
@@ -452,69 +455,3 @@ fn handle_help(app: &mut App, key: KeyEvent) -> AppAction {
     AppAction::None
 }
 
-fn handle_archive_browser(app: &mut App, key: KeyEvent) -> AppAction {
-    let date_jumping = app.archive_browser
-        .as_ref()
-        .map(|ab| ab.date_jump_input.is_some())
-        .unwrap_or(false);
-
-    if date_jumping {
-        match key.code {
-            KeyCode::Esc => app.archive_cancel_date_jump(),
-            KeyCode::Enter => { app.archive_commit_date_jump(); }
-            KeyCode::Backspace => {
-                if let Some(ref mut ab) = app.archive_browser {
-                    if let Some(ref mut s) = ab.date_jump_input { s.pop(); }
-                }
-            }
-            KeyCode::Char(c) => {
-                if let Some(ref mut ab) = app.archive_browser {
-                    if let Some(ref mut s) = ab.date_jump_input {
-                        if s.len() < 10 { s.push(c); }
-                    }
-                }
-            }
-            _ => {}
-        }
-        return AppAction::None;
-    }
-
-    let in_day_view = app.archive_browser
-        .as_ref()
-        .map(|ab| matches!(ab.view, ArchiveView::Day))
-        .unwrap_or(false);
-
-    if in_day_view {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => app.archive_back_to_calendar(),
-            KeyCode::Char('/') => app.archive_begin_date_jump(),
-            KeyCode::Char('[') => app.archive_day_prev(),
-            KeyCode::Char(']') => app.archive_day_next(),
-            KeyCode::Char('j') | KeyCode::Down => {
-                if let Some(ref mut ab) = app.archive_browser {
-                    ab.day_scroll = ab.day_scroll.saturating_add(1);
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if let Some(ref mut ab) = app.archive_browser {
-                    ab.day_scroll = ab.day_scroll.saturating_sub(1);
-                }
-            }
-            _ => {}
-        }
-    } else {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => app.close_archive_browser(),
-            KeyCode::Char('/') => app.archive_begin_date_jump(),
-            KeyCode::Char('h') | KeyCode::Left  => app.archive_prev_day(),
-            KeyCode::Char('l') | KeyCode::Right => app.archive_next_day(),
-            KeyCode::Char('k') | KeyCode::Up    => app.archive_prev_week(),
-            KeyCode::Char('j') | KeyCode::Down  => app.archive_next_week(),
-            KeyCode::Char('[')                   => app.archive_prev_month(),
-            KeyCode::Char(']')                   => app.archive_next_month(),
-            KeyCode::Enter                       => app.archive_open_day(),
-            _ => {}
-        }
-    }
-    AppAction::None
-}

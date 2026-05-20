@@ -85,7 +85,7 @@ impl App {
             .unwrap_or(false);
         if double {
             self.push_undo();
-            if let Some(id) = self.selected_task_id(self.focused_col) {
+            if let Some(id) = self.selected_task_id(self.focus) {
                 self.delete_task(id);
             }
             true
@@ -97,7 +97,7 @@ impl App {
     }
 
     pub fn begin_insert_after(&mut self) {
-        let col = self.focused_col;
+        let col = self.focus;
         let current_id = self.selected_task_id(col);
         let (parent_id, position) = if let Some(id) = current_id {
             let task = self.task_ref(id).unwrap();
@@ -115,7 +115,7 @@ impl App {
     }
 
     pub fn begin_insert_before(&mut self) {
-        let col = self.focused_col;
+        let col = self.focus;
         let current_id = match self.selected_task_id(col) {
             Some(id) => id,
             None => return,
@@ -231,22 +231,17 @@ impl App {
             // Propagate first so column membership is stable before we set the cursor.
             self.propagate_status_up(task_id);
 
-            let col = match status {
-                Status::Todo => Column::Todo,
-                Status::Doing => Column::Doing,
-                Status::Done => Column::Done,
-            };
-            let visible = self.visible_tasks_for(col);
+            let visible = self.visible_tasks_for(status);
             if let Some(new_pos) = visible.iter().position(|t| t.id == task_id) {
-                self.cursor[Self::col_index(col)] = new_pos;
+                self.cursor[Self::status_index(status)] = new_pos;
             }
-            self.focused_col = col;
+            self.focus = status;
         }
         self.mode = Mode::Normal;
     }
 
     pub fn begin_edit(&mut self, cursor_at_end: bool) {
-        let col = self.focused_col;
+        let col = self.focus;
         if let Some(id) = self.selected_task_id(col) {
             if let Some(task) = self.task_ref(id) {
                 let cursor_pos = if cursor_at_end { task.title.chars().count() } else { 0 };
@@ -261,7 +256,7 @@ impl App {
     }
 
     pub fn begin_edit_at_percent(&mut self, percent: usize) {
-        let col = self.focused_col;
+        let col = self.focus;
         if let Some(id) = self.selected_task_id(col) {
             if let Some(task) = self.task_ref(id) {
                 let len = task.title.chars().count();
@@ -286,7 +281,7 @@ impl App {
     }
 
     pub fn begin_bulk_insert(&mut self) {
-        if self.selected_task_id(self.focused_col).is_none() {
+        if self.selected_task_id(self.focus).is_none() {
             return;
         }
         self.bulk_insert = Some(BulkInsertState {
@@ -307,7 +302,7 @@ impl App {
             }
         };
 
-        let parent_id = match self.selected_task_id(self.focused_col) {
+        let parent_id = match self.selected_task_id(self.focus) {
             Some(id) => id,
             None => {
                 self.mode = Mode::Normal;

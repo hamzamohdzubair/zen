@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 impl App {
     pub fn enter_visual(&mut self) {
-        self.visual_anchor_id = self.selected_task_id(self.focused_col);
+        self.visual_anchor_id = self.selected_task_id(self.focus);
         self.mode = Mode::Visual;
     }
 
@@ -20,12 +20,7 @@ impl App {
             }
             self.propagate_status_up(id);
         }
-        let new_col = match status {
-            Status::Todo => Column::Todo,
-            Status::Doing => Column::Doing,
-            Status::Done => Column::Done,
-        };
-        self.focused_col = new_col;
+        self.focus = status;
         self.clamp_all_cursors();
     }
 
@@ -33,7 +28,7 @@ impl App {
     /// All `ids` must share the same parent and be contiguous in the children list.
     pub fn visual_shift_up(&mut self, ids: &[Uuid]) {
         if ids.is_empty() { return; }
-        let cursor_id = self.selected_task_id(self.focused_col);
+        let cursor_id = self.selected_task_id(self.focus);
         let common_parent = self.task_ref(ids[0]).and_then(|t| t.parent_id);
         if ids.iter().any(|&id| self.task_ref(id).and_then(|t| t.parent_id) != common_parent) {
             return;
@@ -77,11 +72,11 @@ impl App {
                 self.tasks.insert(last_idx, task);
             }
         }
-        let col = self.focused_col;
+        let col = self.focus;
         if let Some(cid) = cursor_id {
             let visible = self.visible_tasks_for(col);
             if let Some(pos) = visible.iter().position(|t| t.id == cid) {
-                self.cursor[Self::col_index(col)] = pos;
+                self.cursor[Self::status_index(col)] = pos;
             }
         }
     }
@@ -90,7 +85,7 @@ impl App {
     /// All `ids` must share the same parent and be contiguous in the children list.
     pub fn visual_shift_down(&mut self, ids: &[Uuid]) {
         if ids.is_empty() { return; }
-        let cursor_id = self.selected_task_id(self.focused_col);
+        let cursor_id = self.selected_task_id(self.focus);
         let common_parent = self.task_ref(ids[0]).and_then(|t| t.parent_id);
         if ids.iter().any(|&id| self.task_ref(id).and_then(|t| t.parent_id) != common_parent) {
             return;
@@ -134,11 +129,11 @@ impl App {
                 self.tasks.insert(first_idx, task);
             }
         }
-        let col = self.focused_col;
+        let col = self.focus;
         if let Some(cid) = cursor_id {
             let visible = self.visible_tasks_for(col);
             if let Some(pos) = visible.iter().position(|t| t.id == cid) {
-                self.cursor[Self::col_index(col)] = pos;
+                self.cursor[Self::status_index(col)] = pos;
             }
         }
     }

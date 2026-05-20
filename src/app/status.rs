@@ -30,7 +30,7 @@ impl App {
 
     /// Toggle the selected task's status between Doing and Todo (tree view).
     pub fn tree_toggle_doing(&mut self) {
-        let Some(id) = self.selected_task_id(self.focused_col) else { return; };
+        let Some(id) = self.selected_task_id(self.focus) else { return; };
         let current = self.task_ref(id).map(|t| t.status.clone()).unwrap_or(Status::Todo);
         let new_status = if current == Status::Doing { Status::Todo } else { Status::Doing };
         self.tree_set_status(id, new_status);
@@ -39,7 +39,7 @@ impl App {
     /// Toggle the selected task's status between Done and Todo (tree view).
     /// When marking Done, all descendants are also marked Done.
     pub fn tree_toggle_done(&mut self) {
-        let Some(id) = self.selected_task_id(self.focused_col) else { return; };
+        let Some(id) = self.selected_task_id(self.focus) else { return; };
         let current = self.task_ref(id).map(|t| t.status.clone()).unwrap_or(Status::Todo);
         let new_status = if current == Status::Done { Status::Todo } else { Status::Done };
         if new_status == Status::Done {
@@ -59,21 +59,16 @@ impl App {
     }
 
     pub(super) fn tree_set_status(&mut self, id: Uuid, new_status: Status) {
-        let old_col = self.focused_col;
-        let new_col = match new_status {
-            Status::Todo => Column::Todo,
-            Status::Doing => Column::Doing,
-            Status::Done => Column::Done,
-        };
+        let old_focus = self.focus;
         if let Some(task) = self.task_mut(id) {
             task.transition_to(new_status);
         }
         self.propagate_status_up(id);
-        self.clamp_cursor(old_col);
-        if let Some(pos) = self.visible_tasks_for(new_col).iter().position(|t| t.id == id) {
-            self.cursor[Self::col_index(new_col)] = pos;
+        self.clamp_cursor(old_focus);
+        if let Some(pos) = self.visible_tasks_for(new_status).iter().position(|t| t.id == id) {
+            self.cursor[Self::status_index(new_status)] = pos;
         }
-        self.focused_col = new_col;
+        self.focus = new_status;
     }
 
     /// Returns all visible task IDs in DFS preorder (same order as the tree display).

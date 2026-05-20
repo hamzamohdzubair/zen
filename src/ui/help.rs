@@ -26,12 +26,13 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
-        "Hide / archive",
+        "Hide / show hidden",
         &[
-            ("backspace (done)", "hide from main view (always in db)"),
+            ("backspace (done)", "hide task from main view"),
+            ("backspace (hidden)", "unhide task"),
             ("backspace (todo)", "snooze — prompt for duration (2h 3d 1w)"),
             ("backspace (doing)", "not allowed"),
-            ("g + backspace", "open read-only archive browser"),
+            ("shift+backspace", "toggle showing hidden tasks"),
             ("u", "undo last action"),
             ("r", "redo"),
         ],

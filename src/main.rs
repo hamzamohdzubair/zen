@@ -1,5 +1,4 @@
 mod app;
-mod archive;
 mod input;
 mod storage;
 mod types;

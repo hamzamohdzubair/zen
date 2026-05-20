@@ -7,13 +7,12 @@ use uuid::Uuid;
 pub enum Layer {
     #[default]
     /// Visible in the main view.
-    /// Deserializes old "Foreground" and "Archive" values for backwards-compat.
-    #[serde(alias = "Foreground", alias = "Archive")]
+    #[serde(alias = "Foreground")]
     Active,
     /// Temporarily hidden. Resurfaces when the Unix timestamp `expires_at` passes.
     #[serde(alias = "Background")]
     Snoozed { expires_at: i64 },
-    /// Permanently hidden from the main view; stays in tasks.json forever.
+    /// Hidden from the main view. Press H to reveal; backspace to restore.
     Hidden,
 }
 

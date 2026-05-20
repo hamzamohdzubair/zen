@@ -20,23 +20,6 @@ pub enum PendingConfirm {
     ExpireSnooze(Uuid),
 }
 
-pub enum ArchiveView {
-    Calendar,
-    Day,
-}
-
-pub struct ArchiveBrowserState {
-    pub view: ArchiveView,
-    pub year: i32,
-    pub month: u32,
-    pub selected_day: u32,
-    pub available_dates: std::collections::HashSet<chrono::NaiveDate>,
-    pub day_tasks: Vec<crate::archive::ArchiveTask>,
-    pub day_scroll: usize,
-    /// Active date-jump input (YYYY-MM-DD). Some while the user is typing.
-    pub date_jump_input: Option<String>,
-}
-
 pub struct SearchState {
     pub query: String,
     /// Task IDs in DFS order (ignoring collapse) that contain the query.
@@ -59,8 +42,6 @@ pub enum Mode {
     SnoozeInput,
     /// Typing a search query.
     Search,
-    /// Calendar-based archive browser.
-    ArchiveBrowser,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,23 +57,6 @@ pub struct BulkInsertState {
     pub prefix_input: String,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Column {
-    Todo,
-    Doing,
-    Done,
-}
-
-impl Column {
-    pub fn status(&self) -> Status {
-        match self {
-            Column::Todo => Status::Todo,
-            Column::Doing => Status::Doing,
-            Column::Done => Status::Done,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum InsertPosition {
@@ -125,7 +89,7 @@ pub struct App {
     /// Active search state. Some while a search query is live (typing or post-Enter navigation).
     pub search: Option<SearchState>,
     pub mode: Mode,
-    pub focused_col: Column,
+    pub focus: Status,
     pub cursor: [usize; 3],
     pub tui_scroll_offset: usize,
     pub insert: Option<InsertState>,
@@ -133,7 +97,7 @@ pub struct App {
     pub bulk_insert: Option<BulkInsertState>,
     pub snooze_input: Option<SnoozeInputState>,
     pub pending_confirm: Option<PendingConfirm>,
-    pub archive_browser: Option<ArchiveBrowserState>,
+    pub show_hidden: bool,
     pub status_message: Option<String>,
     pub last_d_press: Option<Instant>,
     pub last_g_press: Option<Instant>,
@@ -159,7 +123,7 @@ impl App {
             tasks,
             search: None,
             mode: Mode::Normal,
-            focused_col: Column::Todo,
+            focus: Status::Todo,
             cursor: [0, 0, 0],
             tui_scroll_offset: 0,
             insert: None,
@@ -167,7 +131,7 @@ impl App {
             bulk_insert: None,
             snooze_input: None,
             pending_confirm: None,
-            archive_browser: None,
+            show_hidden: false,
             status_message: None,
             last_d_press: None,
             last_g_press: None,
@@ -183,16 +147,20 @@ impl App {
         }
     }
 
-    pub fn col_index(col: Column) -> usize {
-        match col {
-            Column::Todo => 0,
-            Column::Doing => 1,
-            Column::Done => 2,
+    pub fn status_index(status: Status) -> usize {
+        match status {
+            Status::Todo => 0,
+            Status::Doing => 1,
+            Status::Done => 2,
         }
     }
 
     pub fn task_visible(&self, task: &Task) -> bool {
-        matches!(task.layer, Layer::Active)
+        match task.layer {
+            Layer::Active => true,
+            Layer::Hidden => self.show_hidden,
+            Layer::Snoozed { .. } => false,
+        }
     }
 
     /// A leaf task is Todo/Doing with no direct children that are also Todo/Doing.
@@ -207,8 +175,7 @@ impl App {
         })
     }
 
-    pub fn visible_tasks_for(&self, col: Column) -> Vec<&Task> {
-        let status = col.status();
+    pub fn visible_tasks_for(&self, status: Status) -> Vec<&Task> {
         let in_col: HashSet<Uuid> = self.tasks.iter()
             .filter(|t| t.status == status && self.task_visible(t))
             .map(|t| t.id)
@@ -251,13 +218,13 @@ impl App {
         }
     }
 
-    pub fn cursor_for(&self, col: Column) -> usize {
-        self.cursor[Self::col_index(col)]
+    pub fn cursor_for(&self, status: Status) -> usize {
+        self.cursor[Self::status_index(status)]
     }
 
-    pub fn clamp_cursor(&mut self, col: Column) {
-        let len = self.visible_tasks_for(col).len();
-        let i = Self::col_index(col);
+    pub fn clamp_cursor(&mut self, status: Status) {
+        let len = self.visible_tasks_for(status).len();
+        let i = Self::status_index(status);
         if len == 0 {
             self.cursor[i] = 0;
         } else if self.cursor[i] >= len {
@@ -266,14 +233,14 @@ impl App {
     }
 
     pub fn clamp_all_cursors(&mut self) {
-        for col in [Column::Todo, Column::Doing, Column::Done] {
-            self.clamp_cursor(col);
+        for status in [Status::Todo, Status::Doing, Status::Done] {
+            self.clamp_cursor(status);
         }
     }
 
-    pub fn selected_task_id(&self, col: Column) -> Option<Uuid> {
-        let tasks = self.visible_tasks_for(col);
-        let cur = self.cursor_for(col);
+    pub fn selected_task_id(&self, status: Status) -> Option<Uuid> {
+        let tasks = self.visible_tasks_for(status);
+        let cur = self.cursor_for(status);
         tasks.get(cur).map(|t| t.id)
     }
 
@@ -287,33 +254,29 @@ impl App {
 
     // ── Navigation ──────────────────────────────────────────────────────────
 
-    /// Navigate the cursor to the task with the given id, updating focused_col and cursor[].
+    /// Navigate the cursor to the task with the given id, updating focus and cursor[].
     pub fn navigate_to_id(&mut self, id: Uuid) {
         if let Some(task) = self.task_ref(id) {
-            let col = match task.status {
-                Status::Todo  => Column::Todo,
-                Status::Doing => Column::Doing,
-                Status::Done  => Column::Done,
-            };
-            self.focused_col = col;
-            let tasks = self.visible_tasks_for(col);
+            let status = task.status;
+            self.focus = status;
+            let tasks = self.visible_tasks_for(status);
             if let Some(pos) = tasks.iter().position(|t| t.id == id) {
-                self.cursor[Self::col_index(col)] = pos;
+                self.cursor[Self::status_index(status)] = pos;
             }
         }
     }
 
     pub fn move_cursor_up(&mut self) {
-        let i = Self::col_index(self.focused_col);
+        let i = Self::status_index(self.focus);
         if self.cursor[i] > 0 {
             self.cursor[i] -= 1;
         }
     }
 
     pub fn move_cursor_down(&mut self) {
-        let col = self.focused_col;
-        let len = self.visible_tasks_for(col).len();
-        let i = Self::col_index(col);
+        let status = self.focus;
+        let len = self.visible_tasks_for(status).len();
+        let i = Self::status_index(status);
         if self.cursor[i] + 1 < len {
             self.cursor[i] += 1;
         }
@@ -421,7 +384,7 @@ mod tests {
         child.parent_id = Some(pid);
         parent.children.push(cid);
         let mut app = App::new(vec![parent, child]);
-        app.cursor[App::col_index(Column::Todo)] = 1;
+        app.cursor[App::status_index(Status::Todo)] = 1;
         app.tree_toggle_done();
         assert_eq!(app.task_ref(cid).unwrap().status, Status::Done);
         assert_eq!(app.task_ref(pid).unwrap().status, Status::Done);
@@ -440,7 +403,7 @@ mod tests {
         child_of_root1.parent_id = Some(root1_id);
         let mut app = App::new(vec![root1, child_of_root1, root2]);
         app.task_mut(root1_id).unwrap().children.push(child_id);
-        app.focused_col = Column::Todo;
+        app.focus = Status::Todo;
         app.cursor[0] = 2;
         app.make_child();
         assert_eq!(app.task_ref(root2_id).unwrap().parent_id, Some(root1_id));
@@ -455,7 +418,7 @@ mod tests {
         let parent_id = parent.id;
         let child_id = child.id;
         let mut app = App::new(vec![parent, child]);
-        app.focused_col = Column::Todo;
+        app.focus = Status::Todo;
         app.cursor[0] = 1;
         app.make_child();
         assert_eq!(app.task_ref(child_id).unwrap().parent_id, Some(parent_id));
@@ -471,7 +434,7 @@ mod tests {
         child.parent_id = Some(parent_id);
         parent.children.push(child_id);
         let mut app = App::new(vec![parent, child]);
-        app.focused_col = Column::Todo;
+        app.focus = Status::Todo;
         app.cursor[0] = 1;
         app.make_root();
         assert!(app.task_ref(child_id).unwrap().parent_id.is_none());
@@ -491,7 +454,7 @@ mod tests {
         child.parent_id = Some(parent_id);
         parent.children.push(child_id);
         let mut app = App::new(vec![grandparent, parent, child]);
-        app.focused_col = Column::Todo;
+        app.focus = Status::Todo;
         app.cursor[0] = 2;
         app.make_root();
         assert_eq!(app.task_ref(child_id).unwrap().parent_id, Some(gp_id));
@@ -523,7 +486,7 @@ mod tests {
         t.children.push(child_a_id);
         t.children.push(child_b_id);
         let mut app = App::new(vec![grandparent, parent, t, child_a, child_b]);
-        app.focused_col = Column::Todo;
+        app.focus = Status::Todo;
         app.cursor[0] = 2; // task is at DFS index 2
         app.make_root();
         // task promoted to grandparent level
@@ -601,8 +564,8 @@ mod tests {
         let parent = task("parent", Status::Doing);
         let parent_id = parent.id;
         let mut app = App::new(vec![parent]);
-        app.focused_col = Column::Doing;
-        app.cursor[App::col_index(Column::Doing)] = 0;
+        app.focus = Status::Doing;
+        app.cursor[App::status_index(Status::Doing)] = 0;
         app.begin_insert_after();
         app.insert.as_mut().unwrap().title = "subtask".into();
         app.insert.as_mut().unwrap().parent_id = Some(parent_id);
@@ -621,8 +584,8 @@ mod tests {
         done_child2.parent_id = Some(parent_id);
         parent.children.push(done_child2.id);
         let mut app = App::new(vec![parent, done_child2]);
-        app.focused_col = Column::Done;
-        app.cursor[App::col_index(Column::Done)] = 0;
+        app.focus = Status::Done;
+        app.cursor[App::status_index(Status::Done)] = 0;
         app.begin_insert_after();
         app.insert.as_mut().unwrap().title = "new subtask".into();
         app.insert.as_mut().unwrap().parent_id = Some(parent_id);

@@ -13,7 +13,7 @@ impl App {
     /// Toggle the active flag on the currently selected task. Returns true if a change was made.
     pub fn flag_selected_task(&mut self) -> bool {
         let Some(flag_idx) = self.active_highlight else { return false; };
-        let Some(id) = self.selected_task_id(self.focused_col) else { return false; };
+        let Some(id) = self.selected_task_id(self.focus) else { return false; };
         if let Some(task) = self.task_mut(id) {
             task.flags ^= 1u8 << flag_idx;
             true

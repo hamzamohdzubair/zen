@@ -3,13 +3,13 @@ use uuid::Uuid;
 
 impl App {
     pub fn fold_selected(&mut self) {
-        if let Some(id) = self.selected_task_id(self.focused_col) {
+        if let Some(id) = self.selected_task_id(self.focus) {
             self.collapsed.insert(id);
         }
     }
 
     pub fn toggle_fold_selected(&mut self) {
-        if let Some(id) = self.selected_task_id(self.focused_col) {
+        if let Some(id) = self.selected_task_id(self.focus) {
             if self.collapsed.contains(&id) {
                 self.collapsed.remove(&id);
             } else {
@@ -47,7 +47,7 @@ impl App {
     pub fn jump_next_doing(&mut self) {
         let rows = self.build_all_rows();
         if rows.is_empty() { return; }
-        let current = self.selected_task_id(self.focused_col);
+        let current = self.selected_task_id(self.focus);
         let current_pos = current
             .and_then(|id| rows.iter().position(|&r| r == id))
             .unwrap_or(0);
@@ -70,7 +70,7 @@ impl App {
 
     /// Fold all, then unfold only the ancestors of the current task (leaving it untouched).
     pub fn fold_focus_current(&mut self) {
-        if let Some(id) = self.selected_task_id(self.focused_col) {
+        if let Some(id) = self.selected_task_id(self.focus) {
             self.fold_all();
             let mut current = id;
             while let Some(pid) = self.task_ref(current).and_then(|t| t.parent_id) {
@@ -93,7 +93,7 @@ impl App {
 
     /// Fold all, then unfold only the path to the first leaf of the current root.
     pub fn fold_focus_local(&mut self) {
-        let current_root = self.selected_task_id(self.focused_col)
+        let current_root = self.selected_task_id(self.focus)
             .map(|id| self.root_task_id(id));
         if let Some(root) = current_root {
             self.fold_all();
@@ -107,7 +107,7 @@ impl App {
     pub fn cycle_leaf_next(&mut self) {
         let roots = self.visible_roots();
         if roots.is_empty() { return; }
-        let current_root = self.selected_task_id(self.focused_col)
+        let current_root = self.selected_task_id(self.focus)
             .map(|id| self.root_task_id(id));
         let next_root = if let Some(root) = current_root {
             let pos = roots.iter().position(|&id| id == root).unwrap_or(0);
@@ -125,7 +125,7 @@ impl App {
     pub fn cycle_leaf_prev(&mut self) {
         let roots = self.visible_roots();
         if roots.is_empty() { return; }
-        let current_root = self.selected_task_id(self.focused_col)
+        let current_root = self.selected_task_id(self.focus)
             .map(|id| self.root_task_id(id));
         let prev_root = if let Some(root) = current_root {
             let pos = roots.iter().position(|&id| id == root).unwrap_or(0);
